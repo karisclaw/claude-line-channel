@@ -61,7 +61,11 @@ public enum DeviceAttitude {
         from attitude: Quaternion,
         contactAxis: DeviceAxis = defaultContactAxis
     ) -> PlaneOrientation? {
-        PlaneOrientation(measuredNormal: attitude.rotate(contactAxis.vector))
+        // The quaternion is validated rather than leaned on: `rotate` falls back to
+        // the identity rotation for a degenerate one, which would report a dropped
+        // sensor sample as a perfectly horizontal joint.
+        guard let attitude = attitude.normalized else { return nil }
+        return PlaneOrientation(measuredNormal: attitude.rotate(contactAxis.vector))
     }
 
     /// Lineation attitude from a device attitude quaternion.
@@ -74,12 +78,16 @@ public enum DeviceAttitude {
         from attitude: Quaternion,
         alignmentAxis: DeviceAxis = defaultLineationAxis
     ) -> LineOrientation? {
-        LineOrientation(measuredAxis: attitude.rotate(alignmentAxis.vector))
+        guard let attitude = attitude.normalized else { return nil }
+        return LineOrientation(measuredAxis: attitude.rotate(alignmentAxis.vector))
     }
 
     /// World-frame direction of a device axis, for callers that need the raw vector
     /// (sample averaging, stillness checks, calibration screens).
-    public static func worldVector(of axis: DeviceAxis, for attitude: Quaternion) -> Vector3 {
-        attitude.rotate(axis.vector)
+    ///
+    /// Returns `nil` for a degenerate quaternion, for the same reason as above.
+    public static func worldVector(of axis: DeviceAxis, for attitude: Quaternion) -> Vector3? {
+        guard let attitude = attitude.normalized else { return nil }
+        return attitude.rotate(axis.vector)
     }
 }

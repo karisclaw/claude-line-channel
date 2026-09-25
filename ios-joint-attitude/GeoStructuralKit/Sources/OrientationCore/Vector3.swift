@@ -99,6 +99,34 @@ public struct Vector3: Equatable, Hashable, Sendable, Codable {
         return self / l
     }
 
+    /// The representative of this **axis** that lies in the upper hemisphere.
+    ///
+    /// `u` and `-u` are the same axis, and this returns whichever of them points
+    /// upward, so both map to one vector.
+    ///
+    /// On the equator neither points upward, and the tie has to be broken by a fixed
+    /// rule on the horizontal components. Without it, a vertical plane whose normal
+    /// has a vertical component of exactly `0.0` — an integer input, or an exact
+    /// plane fit — would report dip directions 180° apart depending on whether that
+    /// component arrived as `0.0` or `-0.0`, since neither compares as less than
+    /// zero.
+    ///
+    /// Returns `nil` for a zero-length or non-finite vector.
+    public var upperHemisphereRepresentative: Vector3? {
+        guard let u = normalized else { return nil }
+        if u.z > 0 { return u }
+        if u.z < 0 { return -u }
+        if u.x > 0 { return u }
+        if u.x < 0 { return -u }
+        return u.y >= 0 ? u : -u
+    }
+
+    /// The representative of this axis that lies in the lower hemisphere — the form
+    /// a pole or a down-plunge direction is wanted in.
+    public var lowerHemisphereRepresentative: Vector3? {
+        upperHemisphereRepresentative.map { -$0 }
+    }
+
     /// The horizontal part of the vector, or `nil` if the vector is vertical.
     public var horizontalComponent: Vector3? {
         Vector3(x, y, 0).normalized

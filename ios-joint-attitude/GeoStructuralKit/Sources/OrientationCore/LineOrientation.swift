@@ -41,11 +41,12 @@ public struct LineOrientation: Equatable, Hashable, Sendable, Codable {
     /// Derives the orientation from a measured axis.
     ///
     /// A lineation is **axial**: the measured vector may point either way along the
-    /// line, and the conversion flips it to the down-plunge end. Returns `nil` for
-    /// a zero-length or non-finite axis.
+    /// line, and the conversion flips it to the down-plunge end, so both ends give
+    /// the same attitude. For a horizontal line neither end plunges and the trend is
+    /// settled by a fixed rule — deterministic, and flagged by
+    /// ``isTrendAmbiguous``. Returns `nil` for a zero-length or non-finite axis.
     public init?(measuredAxis: Vector3) {
-        guard let measured = measuredAxis.normalized else { return nil }
-        let down = measured.up > 0 ? -measured : measured
+        guard let down = measuredAxis.lowerHemisphereRepresentative else { return nil }
         let plunge = GeoAngle.degrees(fromRadians: asin(GeoAngle.clamp(-down.up, -1, 1)))
         let trend = GeoAngle.degrees(fromRadians: atan2(down.east, down.north))
         self.init(trend: trend, plunge: plunge)
@@ -64,13 +65,13 @@ public struct LineOrientation: Equatable, Hashable, Sendable, Codable {
     /// `false` when the line is so close to vertical that its trend is determined
     /// by noise rather than by the rock.
     public var isTrendWellDefined: Bool {
-        plunge <= OrientationTolerance.nearVerticalPlunge
+        plunge <= 90 - OrientationTolerance.nearVerticalPlunge
     }
 
     /// `true` for a (near-)horizontal line, where the two ends are equally valid
     /// and the recorded trend could as well be `trend + 180`.
     public var isTrendAmbiguous: Bool {
-        plunge < OrientationTolerance.nearHorizontalDip
+        plunge < OrientationTolerance.nearHorizontalPlunge
     }
 
     /// Acute angle between two lines, `0...90` degrees. Axial, as lineations are.

@@ -209,3 +209,57 @@ final class ReferenceFrameTests: XCTestCase {
         XCTAssertVectorEqual(ReferenceFrame.fromENU(x: 0, y: 0, z: 1), .upAxis)
     }
 }
+
+final class DeviceAttitudeTests: XCTestCase {
+
+    /// A dropped or corrupt sensor sample must fail the conversion. `Quaternion.rotate`
+    /// falls back to the identity rotation for a degenerate quaternion, which would
+    /// otherwise surface as a confident reading of a perfectly horizontal joint.
+    func testDegenerateQuaternionIsRejectedRatherThanReadAsHorizontal() {
+        let degenerate = Quaternion(w: 0, x: 0, y: 0, z: 0)
+        XCTAssertNil(DeviceAttitude.plane(from: degenerate))
+        XCTAssertNil(DeviceAttitude.line(from: degenerate))
+        XCTAssertNil(DeviceAttitude.worldVector(of: .plusZ, for: degenerate))
+
+        let notFinite = Quaternion(w: .nan, x: 0, y: 0, z: 1)
+        XCTAssertNil(DeviceAttitude.plane(from: notFinite))
+    }
+
+    /// An unnormalized but otherwise valid quaternion is usable — CoreMotion's are
+    /// unit, but a quaternion that has been interpolated or averaged may drift.
+    func testUnnormalizedQuaternionStillConverts() {
+        let attitude = deviceAttitude(forPlaneDip: 40, dipDirection: 210, spin: 0)
+        let scaled = Quaternion(w: attitude.w * 3, x: attitude.x * 3, y: attitude.y * 3, z: attitude.z * 3)
+        let plane = DeviceAttitude.plane(from: scaled)!
+        XCTAssertEqual(plane.dip, 40, accuracy: requiredAccuracyDegrees)
+        XCTAssertAzimuthEqual(plane.dipDirection, 210, accuracy: requiredAccuracyDegrees)
+    }
+
+    /// The two documented default axes: `+z` out of the screen for the contact
+    /// method, `-y` out of the bottom edge for a lineation.
+    func testDefaultAxesAreTheDocumentedOnes() {
+        XCTAssertEqual(DeviceAttitude.defaultContactAxis, .plusZ)
+        XCTAssertEqual(DeviceAttitude.defaultLineationAxis, .minusY)
+        XCTAssertVectorEqual(DeviceAxis.plusZ.vector, Vector3(0, 0, 1))
+        XCTAssertVectorEqual(DeviceAxis.minusY.vector, Vector3(0, -1, 0))
+        for axis in DeviceAxis.allCases {
+            XCTAssertVectorEqual(axis.opposite.vector, -axis.vector)
+            XCTAssertEqual(axis.opposite.opposite, axis)
+        }
+    }
+
+    /// Choosing a different contact axis must be equivalent to physically reorienting
+    /// the phone, not to a change of convention.
+    func testAlternativeContactAxisReadsThatAxisOfTheDevice() {
+        let attitude = deviceAttitude(placingZAxisAlong: Vector3(0.2, -0.3, 0.9), spin: 44)
+        for axis in DeviceAxis.allCases {
+            let plane = DeviceAttitude.plane(from: attitude, contactAxis: axis)!
+            let expected = PlaneOrientation(measuredNormal: attitude.rotate(axis.vector))!
+            // Compared with a tolerance, not for exact equality: the two paths divide
+            // by the quaternion's length a different number of times, so they can
+            // differ in the last bits.
+            XCTAssertEqual(plane.dip, expected.dip, accuracy: 1e-9)
+            XCTAssertAzimuthEqual(plane.dipDirection, expected.dipDirection, accuracy: 1e-9)
+        }
+    }
+}

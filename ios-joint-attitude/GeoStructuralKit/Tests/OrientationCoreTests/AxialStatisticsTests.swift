@@ -73,18 +73,24 @@ final class AxialStatisticsTests: XCTestCase {
         XCTAssertLessThan(arithmetic.length, 0.1)
     }
 
-    /// A burst taken on a vertical face must keep reporting the face the phone was
-    /// held against, rather than the eigensolver's arbitrary sign.
-    func testMeanAxisKeepsTheMeasuredFaceOfAVerticalPlane() {
-        let east = PlaneOrientation(dip: 90, dipDirection: 90)
+    /// A burst on a near-vertical face averages to one plane whichever face it was
+    /// taken from, while the mean *axis* still remembers which direction the phone
+    /// actually faced — the attitude is axial, the measured outward direction is not.
+    func testNearVerticalBurstAveragesToTheSamePlaneFromEitherFace() {
         let jitter = [-0.3, -0.1, 0.0, 0.2, 0.4].map {
             PlaneOrientation(dip: 90 - abs($0), dipDirection: 90 + $0).upwardNormal
         }
-        let summary = AxialStatistics.summarize(jitter)!
-        XCTAssertAzimuthEqual(summary.meanPlane!.dipDirection, east.dipDirection, accuracy: 0.5)
-
+        let east = AxialStatistics.summarize(jitter)!
         let west = AxialStatistics.summarize(jitter.map { -$0 })!
-        XCTAssertAzimuthEqual(west.meanPlane!.dipDirection, 270, accuracy: 0.5)
+
+        XCTAssertEqual(east.meanPlane!.dip, 89.8, accuracy: 1e-3)
+        XCTAssertEqual(west.meanPlane!, east.meanPlane!)
+        XCTAssertAzimuthEqual(east.meanPlane!.dipDirection, 90.04, accuracy: 1e-3)
+        XCTAssertEqual(east.angularStandardDeviation, west.angularStandardDeviation, accuracy: 1e-12)
+
+        // The mean axis keeps the sense of the samples it was built from.
+        XCTAssertAzimuthEqual(east.meanAxis.azimuth!, 90.04, accuracy: 1e-3)
+        XCTAssertAzimuthEqual(west.meanAxis.azimuth!, 270.04, accuracy: 1e-3)
     }
 
     func testEigenvaluesSumToOneAndDescend() {

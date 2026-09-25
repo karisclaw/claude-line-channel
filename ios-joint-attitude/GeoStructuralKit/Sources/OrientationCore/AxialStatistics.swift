@@ -8,8 +8,12 @@ import Foundation
 /// UI should say so rather than record a confident-looking number.
 public struct AxialSummary: Equatable, Sendable {
 
-    /// Mean axis as a unit vector, sign-aligned with the majority of the samples so
-    /// that "which face of the plane was measured" survives averaging.
+    /// Mean axis as a unit vector, sign-aligned with the majority of the samples.
+    ///
+    /// The eigensolver's sign is arbitrary, so it is set from the samples to keep
+    /// the mean pointing the same way they did — useful when the caller wants the
+    /// measured outward direction. ``meanPlane`` and ``meanLine`` do not depend on
+    /// it: both treat their input as an axis.
     public let meanAxis: Vector3
 
     public let sampleCount: Int
@@ -67,8 +71,8 @@ public enum AxialStatistics {
         var mean = eigen.principalVector
 
         // The eigensolver's sign is arbitrary. Point the mean the same way as the
-        // majority of the samples, so a vertical face still reports the direction it
-        // physically looks toward.
+        // samples did, so callers that care about the measured outward direction —
+        // which face of the rock the phone was held against — can still recover it.
         let agreement = units.reduce(0.0) { $0 + $1.dot(mean) }
         if agreement < 0 { mean = -mean }
 

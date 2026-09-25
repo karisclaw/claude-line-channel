@@ -37,7 +37,7 @@ ios-joint-attitude/
 
 - `Vector3` / `Quaternion` — NWU 世界座標系，含 CoreMotion `CMQuaternion` 的分量順序橋接
 - `PlaneOrientation` — 面狀構造：傾角／傾向／走向（右手定則）、朝上法向量、下半球極點、
-  傾向線、走向線、視傾角、兩面夾角、兩面交線
+  傾向線、走向線、視傾角、兩面夾角、兩面交線、垂直面的確定形式與 180° 替代描述
 - `LineOrientation` — 線狀構造：trend／plunge、與面的夾角、面內 rake
 - `DeviceAttitude` — 裝置姿態 → 位態（接觸式用 `+Z`，線狀構造用 `−Y`，軸可切換）
 - `ReferenceFrame` — ARKit `.gravityAndHeading` 與 ENU 轉入 NWU
@@ -58,7 +58,8 @@ swift test
 
 **注意**：撰寫此階段的環境無法安裝 Swift toolchain（網路政策擋掉 swift.org 下載），
 因此 `swift test` **尚未實際執行過**。所有數學與每一個測試的期望值，
-都先用 `tools/reference_check.py`（逐行對照的 Python 移植版）跑過驗證：
+都先用 `tools/reference_check.py`（逐行對照的 Python 移植版）跑過驗證。
+該腳本與 Swift 任一方改動時，另一方與兩邊的期望值都要同步：
 
 ```sh
 python3 tools/reference_check.py
@@ -75,8 +76,15 @@ python3 tools/reference_check.py
 | `testUpwardNormalLeansTowardTheDipDirection` | 用獨立定義的坡面釘住法向量方向，即第 2 節的修正 |
 | `testResultIsInvariantUnderPhoneRollAboutTheFaceNormal` | 手機貼在岩面上怎麼轉都不影響結果 |
 | `testMeasuringEitherFaceGivesTheSameAttitude` | 量岩面正面或反面（懸垂面）結果相同 |
-| `testVerticalPlaneDipDirectionIsStableAgainstNoiseOnTheVerticalComponent` | 垂直面傾向不會因雜訊在 090/270 間跳動 |
+| `testVerticalPlaneDescriptionsAlwaysDenoteTheSamePlane` | 垂直面傾向可能因雜訊翻 180°，但它指的平面不變；`canonicalized` 消除跳動 |
+| `testPlaneJustOffVerticalIsRecoveredFromEitherFace` | 89.7° 的面從任一面量都得到正確位態 |
 | `testDipDirectionIsContinuousApproachingVertical` | 88° → 90° 傾向連續 |
+| `testPoleTrendAndPlungeMatchTheStandardStereonetRelation` | 極點的教科書關係 `trend = dipDir+180`、`plunge = 90−dip` |
+| `testApparentDipEqualsThePlungeOfTheSectionIntersection` | 視傾角公式用「與垂直剖面的交線」獨立驗證，不共用程式碼 |
+| `testIntersectionLiesInBothPlanes` | 900 組掃描，交線必同時位於兩面內 |
+| `testEigenDecompositionSatisfiesItsDefiningProperties` | 200 個矩陣驗 `Av = λv`、正交性、跡不變 |
+| `testExactlyHorizontalNormalGivesTheSameAttitudeFromEitherFace` | 垂直分量恰為 `0.0` 時 `0.0`/`-0.0` 不影響結果 |
+| `testDegenerateQuaternionIsRejectedRatherThanReadAsHorizontal` | 壞掉的感測器樣本回傳 nil，不會被當成水平節理 |
 | `testSignFlippedSamplesGiveTheSameMean` | 軸性平均：符號相反的樣本不會相消（對照組算術平均只剩 0.021） |
 | `testGirdleFabricEigenvalues` | 環帶型 fabric 的特徵值退化情況 |
 | `testARKitMappingPreservesHandedness` | ARKit 轉換行列式為 +1，不鏡射 |

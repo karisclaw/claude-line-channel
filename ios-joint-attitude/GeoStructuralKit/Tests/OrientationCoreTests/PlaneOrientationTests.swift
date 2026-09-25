@@ -27,11 +27,22 @@ final class PlaneOrientationTests: XCTestCase {
                         plane.dip, dip, accuracy: requiredAccuracyDegrees,
                         "dip wrong for \(dip)/\(dipDirection) at spin \(spin)"
                     )
-                    // A horizontal plane has no dip direction to recover.
-                    if dip >= OrientationTolerance.nearHorizontalDip {
+                    if dip >= OrientationTolerance.nearHorizontalDip,
+                       dip <= 90 - OrientationTolerance.nearVerticalDip {
                         XCTAssertAzimuthEqual(
                             plane.dipDirection, dipDirection, accuracy: requiredAccuracyDegrees,
                             "at \(dip)/\(dipDirection) spin \(spin)"
+                        )
+                    } else {
+                        // A horizontal plane has no dip direction to recover, and a
+                        // vertical one has two equally valid ones. What must hold in
+                        // both cases is that the plane itself came back. The 1e-5 is
+                        // the floor of acos near an argument of 1, not slack in the
+                        // conversion: the dip above is still held to 0.01°.
+                        let truth = PlaneOrientation(dip: dip, dipDirection: dipDirection)
+                        XCTAssertEqual(
+                            plane.angle(to: truth), 0, accuracy: 1e-5,
+                            "recovered a different plane at \(dip)/\(dipDirection) spin \(spin)"
                         )
                     }
                 }
@@ -115,7 +126,7 @@ final class PlaneOrientationTests: XCTestCase {
     /// Measuring the underside of an overhanging face gives a downward normal. The
     /// plane is the same plane, so the reported attitude must be identical.
     func testMeasuringEitherFaceGivesTheSameAttitude() {
-        for dip in [10.0, 35, 60, 80] {
+        for dip in [10.0, 35, 60, 80, 89, 89.7, 90] {
             for dipDirection in [15.0, 120, 300] {
                 let normal = PlaneOrientation(dip: dip, dipDirection: dipDirection).upwardNormal
                 let fromAbove = PlaneOrientation(measuredNormal: normal)!
@@ -139,36 +150,70 @@ final class PlaneOrientationTests: XCTestCase {
         XCTAssertTrue(slight.isDipDirectionWellDefined)
     }
 
-    /// On a vertical face the up/down sign of the normal is sensor noise. The
-    /// reported dip direction must not flip 180° as that noise changes sign.
-    func testVerticalPlaneDipDirectionIsStableAgainstNoiseOnTheVerticalComponent() {
+    /// A vertical plane has two equally valid descriptions, 180° apart, and the
+    /// sign of `n_U` that picks between them is sensor noise. What must never change
+    /// is the geometry: every reading has to denote the same plane.
+    ///
+    /// This is deliberately not "the dip direction is stable". Forcing stability by
+    /// taking the dip direction from the as-measured normal while taking the dip from
+    /// the flipped one mixes two vectors, and for a plane at 89.7° measured from its
+    /// lower face that reports a plane 0.6° away from the real one.
+    func testVerticalPlaneDescriptionsAlwaysDenoteTheSamePlane() {
         for dipDirection in [0.0, 90, 180, 270] {
-            let normal = PlaneOrientation(dip: 90, dipDirection: dipDirection).upwardNormal
+            let truth = PlaneOrientation(dip: 90, dipDirection: dipDirection)
             for epsilon in [1e-9, -1e-9, 1e-6, -1e-6] {
-                let noisy = Vector3(normal.x, normal.y, normal.z + epsilon)
+                let noisy = Vector3(truth.upwardNormal.x, truth.upwardNormal.y, truth.upwardNormal.z + epsilon)
                 let plane = PlaneOrientation(measuredNormal: noisy)!
                 XCTAssertEqual(plane.dip, 90, accuracy: 1e-3)
-                XCTAssertAzimuthEqual(
-                    plane.dipDirection, dipDirection, accuracy: 1e-3,
-                    "vertical dip direction flipped under noise \(epsilon)"
+                XCTAssertEqual(
+                    plane.angle(to: truth), 0, accuracy: 1e-3,
+                    "noise \(epsilon) changed the plane, not just its description"
                 )
+                XCTAssertTrue(plane.isDipDirectionAmbiguous)
+                // Canonicalizing removes the 180° jump, for display and storage.
+                XCTAssertAzimuthEqual(
+                    plane.canonicalized.dipDirection,
+                    truth.canonicalized.dipDirection,
+                    accuracy: 1e-3
+                )
+                XCTAssertLessThan(plane.canonicalized.dipDirection, 180)
             }
         }
     }
 
-    /// The two faces of a vertical plane legitimately report dip directions 180°
-    /// apart. Both are correct; the ambiguity is flagged so the UI can offer a
-    /// toggle instead of silently picking one.
-    func testVerticalPlaneReportsTheFaceThatWasMeasuredAndFlagsTheAmbiguity() {
-        let eastFacing = PlaneOrientation(dip: 90, dipDirection: 90)
-        let westFacing = PlaneOrientation(measuredNormal: -eastFacing.upwardNormal)!
+    /// A plane just off vertical is *not* ambiguous in substance: which face you
+    /// measure is determined by the rock, so the attitude must come out right from
+    /// either side. This is the case that a "keep the measured face" rule gets wrong.
+    func testPlaneJustOffVerticalIsRecoveredFromEitherFace() {
+        let truth = PlaneOrientation(dip: 89.7, dipDirection: 270)
+        let fromWestFace = PlaneOrientation(measuredNormal: truth.upwardNormal)!
+        let fromEastFace = PlaneOrientation(measuredNormal: -truth.upwardNormal)!
 
-        XCTAssertAzimuthEqual(eastFacing.dipDirection, 90, accuracy: 1e-9)
-        XCTAssertAzimuthEqual(westFacing.dipDirection, 270, accuracy: 1e-9)
-        XCTAssertTrue(eastFacing.isDipDirectionAmbiguous)
-        XCTAssertTrue(westFacing.isDipDirectionAmbiguous)
-        XCTAssertAzimuthEqual(eastFacing.oppositeFaceDescription.dipDirection, 270, accuracy: 1e-9)
-        XCTAssertEqual(eastFacing.angle(to: westFacing), 0, accuracy: 1e-9)
+        for measured in [fromWestFace, fromEastFace] {
+            XCTAssertEqual(measured.dip, 89.7, accuracy: 1e-9)
+            XCTAssertAzimuthEqual(measured.dipDirection, 270, accuracy: 1e-9)
+            // acos loses half its digits near an argument of 1, so two identical
+            // planes compare as ~8.5e-7° apart. That is the conditioning of acos,
+            // not slack in the conversion — dip and dip direction above are still
+            // held to 1e-9.
+            XCTAssertEqual(measured.angle(to: truth), 0, accuracy: 1e-5)
+        }
+    }
+
+    func testAlternativeVerticalDescriptionOnlyExistsForVerticalPlanes() {
+        let vertical = PlaneOrientation(dip: 90, dipDirection: 90)
+        let alternative = vertical.alternativeVerticalDescription!
+        XCTAssertAzimuthEqual(alternative.dipDirection, 270, accuracy: 1e-9)
+        XCTAssertEqual(alternative.dip, 90, accuracy: 1e-9)
+        // Same plane, different description (1e-5: see the acos note above).
+        XCTAssertEqual(alternative.angle(to: vertical), 0, accuracy: 1e-5)
+        XCTAssertEqual(alternative.canonicalized, vertical.canonicalized)
+
+        // Flipping the dip direction of a dipping plane would name a different plane,
+        // so there is no alternative description to offer.
+        XCTAssertNil(PlaneOrientation(dip: 60, dipDirection: 90).alternativeVerticalDescription)
+        let dipping = PlaneOrientation(dip: 60, dipDirection: 90)
+        XCTAssertEqual(dipping.canonicalized, dipping)
     }
 
     /// The dip direction stays continuous as a face steepens through vertical, so

@@ -62,30 +62,28 @@ public struct PlaneOrientation: Equatable, Hashable, Sendable, Codable {
     ///
     /// `measuredNormal` is the outward normal as physically measured — for the
     /// contact method, the device `+z` axis while the back of the phone is flat on
-    /// the rock face. Either side of the plane may be measured; the conversion
-    /// handles both.
+    /// the rock face. Either side of the plane may be measured: the normal is
+    /// flipped into the upper hemisphere first, so both faces of a plane give the
+    /// same attitude.
     ///
     /// Returns `nil` for a zero-length or non-finite normal, which is how a failed
     /// plane fit or a dropped sensor sample reaches the caller.
     ///
-    /// Near-vertical planes: the up/down sign of the normal is pure sensor noise
-    /// there, so flipping the normal upward would make the reported dip direction
-    /// flicker 180° between samples. Within ``OrientationTolerance/nearVerticalDip``
-    /// of vertical the **as-measured** normal sets the dip direction instead, which
-    /// is stable and reports the direction the measured face actually looks toward.
-    /// The two faces of a vertical plane therefore report dip directions 180° apart
-    /// — both are correct descriptions of the same plane, and
-    /// ``isDipDirectionAmbiguous`` is `true` to say so.
+    /// Both components come from the **same** vector, the upward normal. Deriving
+    /// the dip from one vector and the dip direction from another is exactly the
+    /// error that puts a reading 180° out, so the two are never mixed — not even to
+    /// tidy up the vertical case, where the sign of `n_U` is sensor noise and the
+    /// reported dip direction can therefore jump by 180° between samples. That jump
+    /// is a change of description, not of geometry: both descriptions denote the
+    /// same vertical plane. ``isDipDirectionAmbiguous`` flags it, ``canonicalized``
+    /// removes the jump for display, and ``alternativeVerticalDescription`` gives
+    /// the UI its 180° toggle.
     public init?(measuredNormal: Vector3) {
-        guard let measured = measuredNormal.normalized else { return nil }
-
-        let upward = measured.up < 0 ? -measured : measured
-        let dip = GeoAngle.degrees(fromRadians: acos(GeoAngle.clamp(upward.up, -1, 1)))
-
-        let source = dip > 90 - OrientationTolerance.nearVerticalDip ? measured : upward
-        let dipDirection = GeoAngle.degrees(fromRadians: atan2(source.east, source.north))
-
-        self.init(dip: dip, dipDirection: dipDirection)
+        guard let upward = measuredNormal.upperHemisphereRepresentative else { return nil }
+        self.init(
+            dip: GeoAngle.degrees(fromRadians: acos(GeoAngle.clamp(upward.up, -1, 1))),
+            dipDirection: GeoAngle.degrees(fromRadians: atan2(upward.east, upward.north))
+        )
     }
 
     // MARK: - Derived attitude
@@ -148,17 +146,38 @@ public struct PlaneOrientation: Equatable, Hashable, Sendable, Codable {
         dip >= OrientationTolerance.nearHorizontalDip
     }
 
-    /// `true` for a (near-)vertical plane, whose two faces yield dip directions
-    /// 180° apart. Both describe the same plane; the UI should offer a 180° toggle
-    /// rather than pretending one is wrong.
+    /// `true` for a (near-)vertical plane, where the dip direction and the dip
+    /// direction 180° away describe the same plane.
+    ///
+    /// Two consequences the UI has to handle: the reported dip direction is not
+    /// stable against sensor noise, and neither of the two values is more correct
+    /// than the other. Use ``canonicalized`` for a stable display and
+    /// ``alternativeVerticalDescription`` for a 180° toggle.
     public var isDipDirectionAmbiguous: Bool {
         dip > 90 - OrientationTolerance.nearVerticalDip
     }
 
-    /// The same plane described from its other face. Identical geometry; differs
-    /// only in the recorded dip direction, and only meaningfully when vertical.
-    public var oppositeFaceDescription: PlaneOrientation {
-        PlaneOrientation(dip: dip, dipDirection: dipDirection + 180)
+    /// The other description of a (near-)vertical plane: same dip, dip direction
+    /// 180° away.
+    ///
+    /// `nil` for any plane that is not vertical, where flipping the dip direction
+    /// would name a genuinely different plane rather than re-describe this one.
+    public var alternativeVerticalDescription: PlaneOrientation? {
+        guard isDipDirectionAmbiguous else { return nil }
+        return PlaneOrientation(dip: dip, dipDirection: dipDirection + 180)
+    }
+
+    /// A description that does not change under sensor noise, for storage and
+    /// display.
+    ///
+    /// Vertical planes are reported with a dip direction below 180°; every other
+    /// plane is returned unchanged, since for those the dip direction is already
+    /// determined by the rock. Canonicalizing discards which face of a vertical
+    /// plane was measured — record ``Vector3/azimuth`` of the measured normal
+    /// separately if that matters.
+    public var canonicalized: PlaneOrientation {
+        guard isDipDirectionAmbiguous, dipDirection >= 180 else { return self }
+        return PlaneOrientation(dip: dip, dipDirection: dipDirection - 180)
     }
 
     // MARK: - Relations
@@ -173,6 +192,10 @@ public struct PlaneOrientation: Equatable, Hashable, Sendable, Codable {
     /// Positive means the plane descends toward `trend`; negative means it
     /// descends away from it. Along the strike the apparent dip is 0; along the
     /// dip direction it equals the true dip.
+    ///
+    /// Sectioning a vertical plane along its own strike is degenerate — the section
+    /// plane *is* the plane — and returns 0, the limit approached from every dip
+    /// below 90.
     public func apparentDip(inVerticalSectionAlong trend: Double) -> Double {
         let beta = GeoAngle.radians(fromDegrees: trend - dipDirection)
         let c = cos(beta)
@@ -181,9 +204,20 @@ public struct PlaneOrientation: Equatable, Hashable, Sendable, Codable {
         return GeoAngle.degrees(fromRadians: atan(tan(GeoAngle.radians(fromDegrees: dip)) * c))
     }
 
-    /// The line of intersection of two planes, or `nil` if they are parallel.
-    public func intersection(with other: PlaneOrientation) -> LineOrientation? {
-        guard let axis = upwardNormal.cross(other.upwardNormal).normalized else { return nil }
+    /// The line of intersection of two planes, or `nil` if they are parallel to
+    /// within `minimumSeparation` degrees.
+    ///
+    /// The cross product of two unit normals has length `sin(separation)`, so for
+    /// nearly parallel planes it is dominated by rounding error and its direction is
+    /// meaningless. Rejecting those is the difference between "no intersection" and
+    /// a confidently reported random trend.
+    public func intersection(
+        with other: PlaneOrientation,
+        minimumSeparation: Double = 1e-4
+    ) -> LineOrientation? {
+        let product = upwardNormal.cross(other.upwardNormal)
+        let threshold = sin(GeoAngle.radians(fromDegrees: max(minimumSeparation, 0)))
+        guard product.length > threshold, let axis = product.normalized else { return nil }
         return LineOrientation(measuredAxis: axis)
     }
 

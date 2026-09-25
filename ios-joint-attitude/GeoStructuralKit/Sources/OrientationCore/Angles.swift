@@ -57,16 +57,22 @@ public enum GeoAngle {
 /// the dip direction of a horizontal plane and the trend of a vertical lineation
 /// are mathematically undefined, and the app must flag that rather than print a
 /// confident number derived from sensor noise.
+/// Every value here is a **margin in degrees from the degenerate attitude**, never an
+/// absolute threshold — mixing the two invites `dip > nearVerticalDip`, which reads
+/// plausibly and is nonsense. Compare against `0 + margin` or `90 - margin`.
 public enum OrientationTolerance {
-    /// Below this dip, a plane is treated as horizontal and its dip direction is
-    /// not meaningful (`PlaneOrientation.isDipDirectionWellDefined == false`).
+    /// Within this margin of horizontal, a plane's dip direction is not meaningful
+    /// (`PlaneOrientation.isDipDirectionWellDefined == false`).
     public static let nearHorizontalDip: Double = 0.5
 
-    /// Above this dip, a plane is treated as vertical: the two faces of the plane
-    /// give dip directions 180° apart and both are valid descriptions.
+    /// Within this margin of vertical, a plane's dip direction and the direction 180°
+    /// away describe the same plane, and neither is more correct.
     public static let nearVerticalDip: Double = 0.5
 
-    /// Above this plunge, a lineation is treated as vertical and its trend is not
-    /// meaningful.
-    public static let nearVerticalPlunge: Double = 89.5
+    /// Within this margin of horizontal, a lineation's two ends are equally valid, so
+    /// its trend could as well be `trend + 180`.
+    public static let nearHorizontalPlunge: Double = 0.5
+
+    /// Within this margin of vertical, a lineation's trend is not meaningful.
+    public static let nearVerticalPlunge: Double = 0.5
 }

@@ -19,10 +19,20 @@ final class LineOrientationTests: XCTestCase {
                         line.plunge, plunge, accuracy: requiredAccuracyDegrees,
                         "plunge wrong for \(plunge)->\(trend) roll \(roll)"
                     )
-                    if plunge <= OrientationTolerance.nearVerticalPlunge {
+                    let truth = LineOrientation(trend: trend, plunge: plunge)
+                    if plunge >= OrientationTolerance.nearHorizontalPlunge,
+                       plunge <= 90 - OrientationTolerance.nearVerticalPlunge {
                         XCTAssertAzimuthEqual(
                             line.trend, trend, accuracy: requiredAccuracyDegrees,
                             "at \(plunge)->\(trend) roll \(roll)"
+                        )
+                    } else {
+                        // A vertical line has no trend, and a horizontal one has two
+                        // ends that are equally valid. The line itself must still come
+                        // back. (1e-5: the floor of acos near an argument of 1.)
+                        XCTAssertEqual(
+                            line.angle(to: truth), 0, accuracy: 1e-5,
+                            "recovered a different line at \(plunge)->\(trend) roll \(roll)"
                         )
                     }
                 }
