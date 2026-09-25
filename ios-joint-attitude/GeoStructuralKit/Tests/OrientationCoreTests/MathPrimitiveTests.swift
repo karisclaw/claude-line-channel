@@ -235,13 +235,15 @@ final class DeviceAttitudeTests: XCTestCase {
         XCTAssertAzimuthEqual(plane.dipDirection, 210, accuracy: requiredAccuracyDegrees)
     }
 
-    /// The two documented default axes: `+z` out of the screen for the contact
-    /// method, `-y` out of the bottom edge for a lineation.
+    /// The two documented defaults: the back of the phone on the face for a plane,
+    /// and the left edge along the line for a lineation.
     func testDefaultAxesAreTheDocumentedOnes() {
+        XCTAssertEqual(DeviceAttitude.defaultPlacement, .backOnFace)
         XCTAssertEqual(DeviceAttitude.defaultContactAxis, .plusZ)
-        XCTAssertEqual(DeviceAttitude.defaultLineationAxis, .minusY)
+        XCTAssertEqual(DeviceAttitude.defaultLineationEdge, .leftEdge)
+        XCTAssertEqual(DeviceAttitude.defaultLineationAxis, .plusY)
         XCTAssertVectorEqual(DeviceAxis.plusZ.vector, Vector3(0, 0, 1))
-        XCTAssertVectorEqual(DeviceAxis.minusY.vector, Vector3(0, -1, 0))
+        XCTAssertVectorEqual(DeviceAxis.plusY.vector, Vector3(0, 1, 0))
         for axis in DeviceAxis.allCases {
             XCTAssertVectorEqual(axis.opposite.vector, -axis.vector)
             XCTAssertEqual(axis.opposite.opposite, axis)

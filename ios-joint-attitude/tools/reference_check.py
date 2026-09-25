@@ -215,6 +215,123 @@ def dihedral(p1, p2):
     return D(math.acos(clamp(abs(dot(normal_from_plane(*p1), normal_from_plane(*p2))), 0, 1)))
 
 
+
+# ---- quadrant notation (mirrors QuadrantNotation.swift / QuadrantAttitude.swift) ----
+
+QUADRANTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+
+def azimuth_separation(a, b):
+    d = abs(az(a) - az(b))
+    return min(d, 360.0 - d)
+
+
+def nearest_quadrant(azimuth):
+    return min(QUADRANTS, key=lambda q: azimuth_separation(QUADRANTS.index(q) * 45.0, azimuth))
+
+
+def quadrant_azimuth(label):
+    return QUADRANTS.index(label) * 45.0
+
+
+def bearing_of(azimuth):
+    a = az(azimuth)
+    if a <= 90:  return ("N", a, "E")
+    if a <= 180: return ("S", 180 - a, "E")
+    if a <= 270: return ("S", a - 180, "W")
+    return ("N", 360 - a, "W")
+
+
+def bearing_azimuth(b):
+    ns, angle, ew = b
+    return az({("N", "E"): angle, ("S", "E"): 180 - angle,
+               ("S", "W"): 180 + angle, ("N", "W"): 360 - angle}[(ns, ew)])
+
+
+def format_angle(value):
+    r = round(value * 10) / 10
+    return f"{r:.0f}" if r == round(r) else f"{r:.1f}"
+
+
+def axial_description(b):
+    ns, angle, ew = b
+    if angle < 0.05:  return "N-S"
+    if angle > 89.95: return "E-W"
+    return f"{ns}{format_angle(angle)}{ew}"
+
+
+def quadrant_strike(dipdir):
+    s = az(dipdir - 90)
+    axis = s - 180 if s >= 180 else s
+    return bearing_of(axis if axis <= 90 else axis + 180)
+
+
+def plane_quadrant_description(dip, dipdir):
+    if dip < 0.5:
+        return "Horizontal"
+    text = f"{axial_description(quadrant_strike(dipdir))}, {format_angle(dip)}"
+    return text if dip > 89.5 else text + nearest_quadrant(dipdir)
+
+
+def parse_plane_quadrant(text):
+    """Returns (dip, dip direction), or None where the record is unresolvable."""
+    s = "".join("-" if c in "-\u2013\u2014_" else c
+                for c in text.upper()
+                if not c.isspace() and c not in "\u00b0,/;\u2192")
+    if not s:
+        return None
+    if s == "HORIZONTAL":
+        return (0.0, 0.0)
+
+    if len(s) > 1 and s[0] in "NS" and s[1].isdigit():
+        j = 1
+        while j < len(s) and (s[j].isdigit() or s[j] == "."):
+            j += 1
+        if j >= len(s) or s[j] not in "EW":
+            return None
+        angle = float(s[1:j])
+        if not 0 <= angle <= 90:
+            return None
+        bearing, i = (s[0], angle, s[j]), j + 1
+    elif s.startswith("N-S"):
+        bearing, i = ("N", 0.0, "E"), 3
+    elif s.startswith("E-W"):
+        bearing, i = ("N", 90.0, "E"), 3
+    elif s[0] in "NSEW":
+        bearing = {"N": ("N", 0.0, "E"), "S": ("S", 0.0, "E"),
+                   "E": ("N", 90.0, "E"), "W": ("N", 90.0, "W")}[s[0]]
+        i = 1
+    else:
+        return None
+
+    j = i
+    while j < len(s) and (s[j].isdigit() or s[j] == "."):
+        j += 1
+    if j == i:
+        return None
+    dip = float(s[i:j])
+    if not 0 <= dip <= 90:
+        return None
+
+    letters = s[j:]
+    candidates = [az(bearing_azimuth(bearing) + 90), az(bearing_azimuth(bearing) - 90)]
+    if not letters:
+        # Only a plane with no side to dip toward may omit the quadrant.
+        return (dip, candidates[0]) if (dip > 89.5 or dip < 0.5) else None
+    if letters not in QUADRANTS:
+        return None
+    target = quadrant_azimuth(letters)
+    seps = [azimuth_separation(c, target) for c in candidates]
+    if abs(seps[0] - seps[1]) < 1e-9:
+        return None          # the letter lies along the strike: it picks neither side
+    return (dip, candidates[0] if seps[0] < seps[1] else candidates[1])
+
+
+def in_magnetic_frame(azimuth, declination_east):
+    """true = magnetic + declination, declination positive east."""
+    return az(azimuth - declination_east)
+
+
 # ---------------------------------------------------------------- checks ----
 
 FAILURES = []
@@ -422,6 +539,56 @@ def main():
     lt, lp = line_from_axis(lmean)
     check_azimuth("lineation mean trend", lt, 120.0, 0.2)
     check("lineation mean plunge", lp, 30.0, 0.2)
+
+    # 13. Quadrant notation.
+    known = {
+        (45, 120): "N30E, 45SE",
+        (45, 240): "N30W, 45SW",
+        (30, 90): "N-S, 30E",
+        (60, 0): "E-W, 60N",
+        (20, 315): "N45E, 20NW",
+        (75, 200): "N70W, 75S",
+        (90, 90): "N-S, 90",
+        (0, 0): "Horizontal",
+    }
+    for (dip, dipdir), expected in known.items():
+        got = plane_quadrant_description(float(dip), float(dipdir))
+        if got != expected:
+            FAILURES.append(f"quadrant text {dip}/{dipdir}: got {got!r}, want {expected!r}")
+
+    for dip in (1, 5, 15, 30, 45, 60, 75, 85, 89):
+        for dipdir in range(0, 360, 3):
+            text = plane_quadrant_description(float(dip), float(dipdir))
+            got = parse_plane_quadrant(text)
+            if got is None:
+                FAILURES.append(f"quadrant round trip {dip}/{dipdir}: {text!r} did not parse")
+                continue
+            check(f"quadrant round trip dip {dip}/{dipdir}", got[0], float(dip))
+            check_azimuth(f"quadrant round trip dip direction {dip}/{dipdir}", got[1], float(dipdir))
+
+    # A vertical plane keeps its geometry, not its description.
+    for dipdir in (0, 90, 180, 270):
+        text = plane_quadrant_description(90.0, float(dipdir))
+        got = parse_plane_quadrant(text)
+        check(f"vertical quadrant round trip {dipdir}", dihedral(got, (90, dipdir)), 0.0, DIHEDRAL_FLOOR)
+
+    for text in ("N45E, 45NE", "N45E, 45SW", "N30E, 45", "N30E, 45XY",
+                 "N30E, 120SE", "hello", "45SE", ""):
+        if parse_plane_quadrant(text) is not None:
+            FAILURES.append(f"quadrant parse should have rejected {text!r}")
+    for text in ("N45E, 45SE", "N30E, 90", "N30E/45SE", "n 30 e 45 se",
+                 "E-W, 60N", "N-S, 30E", "N30E, 90SE"):
+        if parse_plane_quadrant(text) is None:
+            FAILURES.append(f"quadrant parse should have accepted {text!r}")
+
+    # 14. Magnetic declination: true = magnetic + declination, positive east.
+    check_azimuth("Taiwan declination", in_magnetic_frame(0.0, -4.0), 4.0)
+    check_azimuth("east declination", in_magnetic_frame(90.0, 10.0), 80.0)
+    for true_azimuth in (0.0, 5.0, 90.0, 180.0, 355.0, 359.0):
+        for declination in (-4.0, 10.0, 0.0):
+            magnetic = in_magnetic_frame(true_azimuth, declination)
+            check_azimuth(f"declination round trip {true_azimuth}/{declination}",
+                          az(magnetic + declination), true_azimuth)
 
     print()
     if FAILURES:
