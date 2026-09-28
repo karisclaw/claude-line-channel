@@ -43,7 +43,8 @@ ios-joint-attitude/
 - `ReferenceFrame` — ARKit `.gravityAndHeading` 與 ENU 轉入 NWU
 - `QuadrantBearing` / `CompassQuadrant` — 象限記法 `N30°E, 45°SE` 的產生與解析
 - `MagneticDeclination` — 真北／磁北互轉，磁偏角東偏為正
-- `DevicePlacement` / `DeviceEdge` — 以野外動作命名的手機擺放方式
+- `DevicePlacement` / `DeviceEdge` / `MeasurementGeometry` — 以野外動作命名的手機擺放方式，
+  量測前選擇並隨紀錄儲存
 - `AttitudeConvention` — 慣例版本章，供紀錄標記
 - `SymmetricMatrix3` — 方位張量與 Jacobi 特徵分解（A2 的平均與 C3 的 Woodcock 共用）
 - `AxialStatistics` — 一次取樣的軸性平均與離散度
@@ -92,6 +93,8 @@ python3 tools/reference_check.py
 | `testQuadrantNotationRoundTripsForEveryInclinedPlane` | 象限記法 1080 組字串往返 |
 | `testDipQuadrantAlongTheStrikeIsRejected` | 字母落在走向線上時拒絕解析，不憑空猜傾向 |
 | `testDeclinationDerivedFromAHeadingPair` | 磁偏角跨越北方 0/360 時仍正確（單純相減會得到 350 而不是 −10）|
+| `testOutwardNormalPointsAwayFromTheRockNotIntoIt` | 手機立在水平面上時外法向量必須朝上 —— 位態斷言抓不到符號錯誤 |
+| `testOnlyThreeContactAxesCanChangeAnAttitude` | 六種貼法收斂成三個位態 |
 | `testSignFlippedSamplesGiveTheSameMean` | 軸性平均：符號相反的樣本不會相消（對照組算術平均只剩 0.021） |
 | `testGirdleFabricEigenvalues` | 環帶型 fabric 的特徵值退化情況 |
 | `testARKitMappingPreservesHandedness` | ARKit 轉換行列式為 +1，不鏡射 |

@@ -327,6 +327,21 @@ def parse_plane_quadrant(text):
     return (dip, candidates[0] if seps[0] < seps[1] else candidates[1])
 
 
+# ---- device placement (mirrors DevicePlacement.outwardNormalAxis) ----
+
+# The outward normal points from the rock into the air, so it is the OPPOSITE of the
+# axis the contacting face looks along. The phone's back looks along -z, its left side
+# along -x, its bottom edge along -y.
+OUTWARD_NORMAL_AXIS = {
+    "backOnFace": (0.0, 0.0, 1.0),        # +z
+    "screenOnFace": (0.0, 0.0, -1.0),     # -z
+    "leftSideOnFace": (1.0, 0.0, 0.0),    # +x
+    "rightSideOnFace": (-1.0, 0.0, 0.0),  # -x
+    "bottomEdgeOnFace": (0.0, 1.0, 0.0),  # +y
+    "topEdgeOnFace": (0.0, -1.0, 0.0),    # -y
+}
+
+
 def in_magnetic_frame(azimuth, declination_east):
     """true = magnetic + declination, declination positive east."""
     return az(azimuth - declination_east)
@@ -589,6 +604,31 @@ def main():
             magnetic = in_magnetic_frame(true_azimuth, declination)
             check_azimuth(f"declination round trip {true_azimuth}/{declination}",
                           az(magnetic + declination), true_azimuth)
+
+    # 15. Device placement signs, checked physically: rest the phone on a horizontal
+    #     surface and the outward normal of that surface must point UP, never down.
+    #     An attitude cannot catch a flipped sign here, because attitudes are axial.
+    resting = {
+        # placement: device axis images in world NWU (x, y, z columns)
+        "backOnFace": ((1, 0, 0), (0, 1, 0), (0, 0, 1)),            # flat on its back
+        "leftSideOnFace": ((0, 0, 1), (1, 0, 0), (0, 1, 0)),        # standing on left side
+        "bottomEdgeOnFace": ((1, 0, 0), (0, 0, 1), (0, -1, 0)),     # standing on bottom edge
+    }
+    for placement, (cx, cy, cz) in resting.items():
+        determinant = dot(cx, cross(cy, cz))
+        check(f"{placement} test frame is a rotation", determinant, 1.0, 1e-12)
+        axis = OUTWARD_NORMAL_AXIS[placement]
+        world = tuple(axis[0] * cx[i] + axis[1] * cy[i] + axis[2] * cz[i] for i in range(3))
+        check(f"{placement} outward normal points up", world[2], 1.0, 1e-12)
+        check(f"{placement} reads a horizontal plane", plane_from_normal(world)[0], 0.0, 1e-9)
+
+    # Opposite placements are the two faces of one plane: same attitude, reversed
+    # measured direction.
+    for a, b in (("backOnFace", "screenOnFace"),
+                 ("leftSideOnFace", "rightSideOnFace"),
+                 ("bottomEdgeOnFace", "topEdgeOnFace")):
+        check(f"{a}/{b} are opposite directions",
+              dot(OUTWARD_NORMAL_AXIS[a], OUTWARD_NORMAL_AXIS[b]), -1.0, 1e-15)
 
     print()
     if FAILURES:

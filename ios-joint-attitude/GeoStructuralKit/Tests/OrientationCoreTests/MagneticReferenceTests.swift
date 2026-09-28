@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import OrientationCore
 
@@ -88,26 +89,104 @@ final class AttitudeConventionTests: XCTestCase {
 
 final class DevicePlacementTests: XCTestCase {
 
-    /// Each placement reads the axis that points out of the rock for it.
+    /// The outward normal points from the rock into the air, so it is the opposite of
+    /// the axis the contacting face looks along.
     func testPlacementsMapToTheOutwardNormal() {
         XCTAssertEqual(DevicePlacement.backOnFace.outwardNormalAxis, .plusZ)
         XCTAssertEqual(DevicePlacement.screenOnFace.outwardNormalAxis, .minusZ)
-        XCTAssertEqual(DevicePlacement.leftSideOnFace.outwardNormalAxis, .minusX)
-        XCTAssertEqual(DevicePlacement.rightSideOnFace.outwardNormalAxis, .plusX)
-        XCTAssertEqual(DevicePlacement.bottomEdgeOnFace.outwardNormalAxis, .minusY)
-        XCTAssertEqual(DevicePlacement.topEdgeOnFace.outwardNormalAxis, .plusY)
+        XCTAssertEqual(DevicePlacement.leftSideOnFace.outwardNormalAxis, .plusX)
+        XCTAssertEqual(DevicePlacement.rightSideOnFace.outwardNormalAxis, .minusX)
+        XCTAssertEqual(DevicePlacement.bottomEdgeOnFace.outwardNormalAxis, .plusY)
+        XCTAssertEqual(DevicePlacement.topEdgeOnFace.outwardNormalAxis, .minusY)
+    }
 
-        // Opposite placements read opposite faces of the same plane, so they must
-        // give the same attitude.
+    /// The physical check the signs above have to survive: stand the phone on its
+    /// left side on a horizontal surface. The rock is below, the air is above, so the
+    /// outward normal of the face must point **up**.
+    ///
+    /// The attitude alone cannot catch a flipped sign here, because a plane's attitude
+    /// is axial — which is exactly why this asserts the vector.
+    func testOutwardNormalPointsAwayFromTheRockNotIntoIt() {
+        // Phone standing on its left edge: device +x (right side) points to the zenith,
+        // +y (top) points north, +z (screen) looks west.
+        let standingOnLeftSide = Quaternion(
+            deviceXInWorld: .upAxis, deviceYInWorld: .northAxis, deviceZInWorld: .westAxis
+        )!
+        let geometry = MeasurementGeometry(placement: .leftSideOnFace, edge: .leftEdge)
+        let normal = geometry.outwardNormal(from: standingOnLeftSide)!
+        XCTAssertGreaterThan(normal.up, 0.999, "the outward normal points into the rock")
+        XCTAssertEqual(geometry.plane(from: standingOnLeftSide)!.dip, 0, accuracy: 1e-9)
+
+        // Lying flat on its back on the same surface, the normal is up as well.
+        let lyingOnBack = Quaternion.identity
+        let onBack = MeasurementGeometry(placement: .backOnFace, edge: .leftEdge)
+        XCTAssertGreaterThan(onBack.outwardNormal(from: lyingOnBack)!.up, 0.999)
+
+        // Resting on its bottom edge on the same surface: device -y points down, so
+        // the outward normal is +y, pointing up.
+        let standingOnBottomEdge = Quaternion(
+            deviceXInWorld: .northAxis, deviceYInWorld: .upAxis, deviceZInWorld: .eastAxis
+        )!
+        let onBottomEdge = MeasurementGeometry(placement: .bottomEdgeOnFace, edge: .leftEdge)
+        XCTAssertGreaterThan(onBottomEdge.outwardNormal(from: standingOnBottomEdge)!.up, 0.999)
+    }
+
+    /// Opposite placements read opposite faces of the same plane, so the attitude is
+    /// identical while the measured outward direction is reversed.
+    func testOppositePlacementsAgreeOnTheAttitudeAndDisagreeOnTheDirection() {
         let attitude = deviceAttitude(placingZAxisAlong: Vector3(0.3, 0.2, 0.93), spin: 71)
+        for (a, b) in [(DevicePlacement.backOnFace, DevicePlacement.screenOnFace),
+                       (.leftSideOnFace, .rightSideOnFace),
+                       (.bottomEdgeOnFace, .topEdgeOnFace)] {
+            XCTAssertEqual(
+                DeviceAttitude.plane(from: attitude, placement: a)!,
+                DeviceAttitude.plane(from: attitude, placement: b)!
+            )
+            XCTAssertVectorEqual(
+                MeasurementGeometry(placement: a, edge: .leftEdge).outwardNormal(from: attitude)!,
+                -MeasurementGeometry(placement: b, edge: .leftEdge).outwardNormal(from: attitude)!,
+                accuracy: 1e-15
+            )
+        }
+    }
+
+    /// Only three choices change an attitude, because the two placements on one axis
+    /// are the two faces of a single plane.
+    func testOnlyThreeContactAxesCanChangeAnAttitude() {
+        XCTAssertEqual(DevicePlacement.backOnFace.contactAxisPair, .z)
+        XCTAssertEqual(DevicePlacement.screenOnFace.contactAxisPair, .z)
+        XCTAssertEqual(DevicePlacement.leftSideOnFace.contactAxisPair, .x)
+        XCTAssertEqual(DevicePlacement.rightSideOnFace.contactAxisPair, .x)
+        XCTAssertEqual(DevicePlacement.bottomEdgeOnFace.contactAxisPair, .y)
+        XCTAssertEqual(DevicePlacement.topEdgeOnFace.contactAxisPair, .y)
+
+        let attitude = deviceAttitude(placingZAxisAlong: Vector3(-0.4, 0.5, 0.77), spin: 12)
+        let distinct = Set(DevicePlacement.allCases.map {
+            DeviceAttitude.plane(from: attitude, placement: $0)!
+        })
+        XCTAssertEqual(distinct.count, 3, "six placements must collapse onto three attitudes")
+    }
+
+    /// The field picker offers every placement a geologist would actually use, and
+    /// leaves out the one that means working blind.
+    func testFieldPickerContents() {
         XCTAssertEqual(
-            DeviceAttitude.plane(from: attitude, placement: .backOnFace)!,
-            DeviceAttitude.plane(from: attitude, placement: .screenOnFace)!
+            DevicePlacement.fieldSelectable,
+            [.backOnFace, .leftSideOnFace, .rightSideOnFace, .bottomEdgeOnFace, .topEdgeOnFace]
         )
-        XCTAssertEqual(
-            DeviceAttitude.plane(from: attitude, placement: .leftSideOnFace)!,
-            DeviceAttitude.plane(from: attitude, placement: .rightSideOnFace)!
-        )
+        XCTAssertFalse(DevicePlacement.fieldSelectable.contains(.screenOnFace))
+        XCTAssertEqual(DeviceEdge.fieldSelectable, [.leftEdge, .rightEdge, .bottomEdge, .topEdge])
+        XCTAssertTrue(DevicePlacement.fieldSelectable.contains(DeviceAttitude.defaultPlacement))
+        XCTAssertTrue(DeviceEdge.fieldSelectable.contains(DeviceAttitude.defaultLineationEdge))
+    }
+
+    /// The setup survives a round trip, so it can be stored with the measurement.
+    func testMeasurementGeometryIsCodable() throws {
+        let geometry = MeasurementGeometry(placement: .rightSideOnFace, edge: .bottomEdge)
+        let data = try JSONEncoder().encode(geometry)
+        XCTAssertEqual(try JSONDecoder().decode(MeasurementGeometry.self, from: data), geometry)
+        XCTAssertEqual(MeasurementGeometry.default.placement, .backOnFace)
+        XCTAssertEqual(MeasurementGeometry.default.edge, .leftEdge)
     }
 
     /// The long edges of the phone run bottom-to-top, so they lie along `y`; the

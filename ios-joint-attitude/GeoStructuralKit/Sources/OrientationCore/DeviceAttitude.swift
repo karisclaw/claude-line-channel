@@ -28,32 +28,82 @@ public enum DeviceAxis: String, CaseIterable, Sendable, Codable {
     }
 }
 
-/// How the phone is held against a planar surface, named the way it is done in the
-/// field rather than by device axis.
+/// How the phone is held against a planar surface, named after the field action
+/// rather than after a device axis.
 ///
-/// The outward normal of the rock face is whichever device axis points away from the
-/// rock for that placement.
+/// The geologist picks one before measuring, and it is stored with the measurement:
+/// the same device attitude yields three different planes depending on which face of
+/// the phone was against the rock, and nothing in the recorded numbers reveals which
+/// was used.
 public enum DevicePlacement: String, CaseIterable, Sendable, Codable {
     /// Back of the phone flat on the face, screen looking away from the rock.
     case backOnFace
     /// Left side of the phone flat on the face, used the way a compass edge is.
     case leftSideOnFace
+    /// Right side of the phone flat on the face.
     case rightSideOnFace
+    /// Bottom (short) edge of the phone flat on the face.
     case bottomEdgeOnFace
+    /// Top (short) edge of the phone flat on the face.
     case topEdgeOnFace
-    /// Screen flat on the face. Included for completeness; it means the back of the
-    /// phone is what you are reading, which is rarely what anyone wants.
+    /// Screen flat on the face. It works, but it means reading the rock through the
+    /// side of the phone you cannot see, so it is not offered in the field picker.
     case screenOnFace
 
-    /// The device axis that points out of the rock for this placement.
+    /// The device axis pointing **out of the rock**, away from the contact surface.
+    ///
+    /// The outward normal points from the rock into the air — toward whoever is
+    /// holding the phone — so it is the *opposite* of the axis the contacting face
+    /// looks along. The phone's back looks along `-z`, so resting it on a bedding
+    /// plane makes the outward normal `+z`; its left side looks along `-x`, so
+    /// standing the phone on that side makes the outward normal `+x`.
+    ///
+    /// Both signs of an axis give the same ``PlaneOrientation``, because a plane's
+    /// attitude is axial. The sign matters for the measured outward direction, which
+    /// is the only record of which face of a vertical joint was touched.
     public var outwardNormalAxis: DeviceAxis {
         switch self {
         case .backOnFace: .plusZ
         case .screenOnFace: .minusZ
-        case .leftSideOnFace: .minusX
-        case .rightSideOnFace: .plusX
-        case .bottomEdgeOnFace: .minusY
-        case .topEdgeOnFace: .plusY
+        case .leftSideOnFace: .plusX
+        case .rightSideOnFace: .minusX
+        case .bottomEdgeOnFace: .plusY
+        case .topEdgeOnFace: .minusY
+        }
+    }
+
+    /// The axis the contact normal lies along, ignoring which way round the phone is.
+    ///
+    /// Only three distinct choices affect an attitude — `x`, `y` or `z` — because the
+    /// two placements on a given axis are the two faces of one plane. Anything trying
+    /// to detect the placement automatically only has to pick among these three.
+    public var contactAxisPair: DeviceAxisPair {
+        switch self {
+        case .backOnFace, .screenOnFace: .z
+        case .leftSideOnFace, .rightSideOnFace: .x
+        case .bottomEdgeOnFace, .topEdgeOnFace: .y
+        }
+    }
+
+    /// The placements offered in the field picker, in the order to show them.
+    ///
+    /// ``screenOnFace`` is left out: it is geometrically valid but means working
+    /// blind, and an accidental selection would produce a plausible-looking attitude
+    /// 180° from the face actually touched.
+    public static let fieldSelectable: [DevicePlacement] = [
+        .backOnFace, .leftSideOnFace, .rightSideOnFace, .bottomEdgeOnFace, .topEdgeOnFace
+    ]
+}
+
+/// An unsigned device axis — the pair of opposite directions along one axis.
+public enum DeviceAxisPair: String, CaseIterable, Sendable, Codable {
+    case x, y, z
+
+    public var positiveDirection: DeviceAxis {
+        switch self {
+        case .x: .plusX
+        case .y: .plusY
+        case .z: .plusZ
         }
     }
 }
@@ -64,6 +114,9 @@ public enum DeviceEdge: String, CaseIterable, Sendable, Codable {
     case rightEdge
     case topEdge
     case bottomEdge
+
+    /// The edges offered in the field picker, in the order to show them.
+    public static let fieldSelectable: [DeviceEdge] = [.leftEdge, .rightEdge, .bottomEdge, .topEdge]
 
     /// The device axis running **along** this edge.
     ///
