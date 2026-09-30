@@ -342,6 +342,97 @@ OUTWARD_NORMAL_AXIS = {
 }
 
 
+# ---- A2: sampling and quality (mirrors StillnessDetector / BurstCollector /
+#          MagneticEnvironment / CalibrationCheck / PlacementCrossCheck) ----
+
+def vector_standard_deviation(vectors):
+    """Deviation of the acceleration VECTOR about its mean, not of its magnitude.
+
+    A phone rocked steadily holds its magnitude almost constant while the direction
+    swings; a magnitude-only test calls that still.
+    """
+    n = len(vectors)
+    mean = [sum(v[i] for v in vectors) / n for i in range(3)]
+    total = sum(sum((v[i] - mean[i]) ** 2 for i in range(3)) for v in vectors)
+    return math.sqrt(total / (n - 1))
+
+
+def burst_shape(rate, duration, minimum_samples):
+    """(first index collected, last index, sample count, effective rate)."""
+    start = minimum_samples - 1          # the first sample whose window is full
+    end = start
+    while (end - start) / rate < duration:
+        end += 1
+    elapsed = (end - start) / rate
+    count = end - start + 1
+    return start, end, count, (count - 1) / elapsed
+
+
+def magnetic_verdict(strength, accuracy, heading,
+                     field_range=(25.0, 65.0), marginal=10.0, unusable=20.0):
+    reasons, severity = [], 0
+
+    def raise_to(level):
+        nonlocal severity
+        severity = max(severity, level)
+
+    if strength is None:
+        reasons.append("fieldStrengthUnknown")
+        raise_to(1)
+    elif not field_range[0] <= strength <= field_range[1]:
+        reasons.append("fieldStrengthOutsideEarthRange")
+        raise_to(2)
+
+    if accuracy == -1:
+        reasons.append("magnetometerUncalibrated")
+        raise_to(2)
+    elif accuracy == 0:
+        reasons.append("magnetometerPoorlyCalibrated")
+        raise_to(2)
+
+    if heading is not None:
+        if heading < 0:
+            reasons.append("headingInvalid")
+            raise_to(2)
+        elif heading > unusable:
+            reasons.append("headingAccuracyUnusable")
+            raise_to(2)
+        elif heading > marginal:
+            reasons.append("headingAccuracyMarginal")
+            raise_to(1)
+
+    return ["good", "marginal", "disturbed"][severity], reasons
+
+
+def calibration_error(reference, measured):
+    """(tilt error, signed azimuth error, total dihedral angle)."""
+    tilt = abs(measured[0] - reference[0])
+    delta = az(measured[1] - reference[1])
+    azimuth = delta - 360 if delta > 180 else delta
+    return tilt, azimuth, dihedral(reference, measured)
+
+
+def impulse_axis(accelerations, minimum_peak=0.15, minimum_confidence=0.6):
+    """(implied axis or None, confidence, peak). Never returns a correction."""
+    energy = {"x": 0.0, "y": 0.0, "z": 0.0}
+    peak = 0.0
+    for a in accelerations:
+        energy["x"] += a[0] ** 2
+        energy["y"] += a[1] ** 2
+        energy["z"] += a[2] ** 2
+        peak = max(peak, math.sqrt(sum(c * c for c in a)))
+    total = sum(energy.values())
+    if total <= 0 or peak < minimum_peak:
+        return None, 0.0, peak
+    leading = max(energy, key=energy.get)
+    confidence = energy[leading] / total
+    return (leading if confidence >= minimum_confidence else None), confidence, peak
+
+
+def octant(vector):
+    return (1 if vector[0] >= 0 else 0) | (2 if vector[1] >= 0 else 0) | (4 if vector[2] >= 0 else 0)
+
+
 def in_magnetic_frame(azimuth, declination_east):
     """true = magnetic + declination, declination positive east."""
     return az(azimuth - declination_east)
@@ -629,6 +720,94 @@ def main():
                  ("bottomEdgeOnFace", "topEdgeOnFace")):
         check(f"{a}/{b} are opposite directions",
               dot(OUTWARD_NORMAL_AXIS[a], OUTWARD_NORMAL_AXIS[b]), -1.0, 1e-15)
+
+    # 16. Stillness: the vector test catches steady rocking that a magnitude test misses.
+    rocking = [(0.05 * math.cos(k * 0.7), 0.05 * math.sin(k * 0.7), 0.0) for k in range(15)]
+    magnitudes = [math.sqrt(sum(c * c for c in v)) for v in rocking]
+    mean_magnitude = sum(magnitudes) / len(magnitudes)
+    magnitude_spread = math.sqrt(
+        sum((m - mean_magnitude) ** 2 for m in magnitudes) / (len(magnitudes) - 1))
+    check("rocking holds its magnitude constant", magnitude_spread, 0.0, 1e-12)
+    vector_spread = vector_standard_deviation(rocking)
+    print(f"steady rocking: magnitude spread {magnitude_spread:.2e} g "
+          f"(reads as still), vector spread {vector_spread:.4f} g (does not)")
+    if vector_spread <= 0.02:
+        FAILURES.append("steady rocking should not pass the stillness threshold")
+
+    quiet = [(0.002 * math.sin(k), 0.002 * math.cos(k), 0.001) for k in range(15)]
+    if vector_standard_deviation(quiet) > 0.02:
+        FAILURES.append("a quiet hand-held phone should pass the stillness threshold")
+
+    # 17. Burst shape at the documented settings.
+    start, end, count, rate = burst_shape(64.0, 1.5, 10)
+    check("burst first collected index", float(start), 9.0, 0.0)
+    check("burst last index", float(end), 105.0, 0.0)
+    check("burst sample count", float(count), 97.0, 0.0)
+    check("burst effective rate", rate, 64.0, 1e-9)
+    _, _, slow_count, slow_rate = burst_shape(32.0, 1.5, 10)
+    check("slow burst sample count", float(slow_count), 49.0, 0.0)
+    check("slow burst effective rate", slow_rate, 32.0, 1e-9)
+    if slow_rate >= 50.0 * 0.8:
+        FAILURES.append("32 Hz should not satisfy a 50 Hz request")
+
+    # 18. Magnetic verdicts.
+    magnetic_cases = [
+        ((48, 2, 5), "good", []),
+        ((48, 1, None), "good", []),
+        ((120, 2, 5), "disturbed", ["fieldStrengthOutsideEarthRange"]),
+        ((24.9, 2, 5), "disturbed", ["fieldStrengthOutsideEarthRange"]),
+        ((25, 2, 5), "good", []),
+        ((65, 2, 5), "good", []),
+        ((48, 0, 5), "disturbed", ["magnetometerPoorlyCalibrated"]),
+        ((48, -1, 5), "disturbed", ["magnetometerUncalibrated"]),
+        ((48, 2, -1), "disturbed", ["headingInvalid"]),
+        ((48, 2, 15), "marginal", ["headingAccuracyMarginal"]),
+        ((48, 2, 25), "disturbed", ["headingAccuracyUnusable"]),
+        ((None, 2, 5), "marginal", ["fieldStrengthUnknown"]),
+        ((120, 2, 15), "disturbed",
+         ["fieldStrengthOutsideEarthRange", "headingAccuracyMarginal"]),
+    ]
+    for (strength, accuracy, heading), expected_verdict, expected_reasons in magnetic_cases:
+        verdict, reasons = magnetic_verdict(strength, accuracy, heading)
+        if verdict != expected_verdict or reasons != expected_reasons:
+            FAILURES.append(
+                f"magnetic {strength}/{accuracy}/{heading}: got {verdict} {reasons}, "
+                f"want {expected_verdict} {expected_reasons}")
+
+    # 19. Calibration error decomposition.
+    tilt, azimuth, total = calibration_error((45, 90), (45, 95))
+    check("magnetometer-only tilt error", tilt, 0.0, 1e-12)
+    check("magnetometer-only azimuth error", azimuth, 5.0, 1e-12)
+    check("magnetometer-only total error", total, 3.534973, 1e-5)
+    tilt, azimuth, total = calibration_error((45, 90), (46, 90))
+    check("gravity-only tilt error", tilt, 1.0, 1e-12)
+    check("gravity-only azimuth error", azimuth, 0.0, 1e-12)
+    check("gravity-only total error", total, 1.0, 1e-9)
+    tilt, azimuth, total = calibration_error((45, 90), (46, 95))
+    check("combined total error", total, 3.703097, 1e-5)
+    _, azimuth, _ = calibration_error((30, 2), (30, 358))
+    check("azimuth error wraps across north", azimuth, -4.0, 1e-12)
+
+    # 20. Placement cross-check: an opinion only when the impulse earns one.
+    impulse_cases = [
+        ([(0.01, 0.01, -0.4), (0.02, -0.01, -0.9), (0.0, 0.01, -0.5), (0.01, 0.0, -0.1)], "z"),
+        ([(0.7, 0.02, 0.01), (0.4, -0.01, 0.02), (0.1, 0.0, 0.0)], "x"),
+        ([(0.01, 0.0, -0.03), (0.0, 0.01, -0.02)], None),      # placed gently
+        ([(0.3, 0.31, 0.29), (0.28, 0.3, 0.32)], None),        # slid in, or hand tremor
+        ([], None),
+    ]
+    for accelerations, expected in impulse_cases:
+        axis, confidence, peak = impulse_axis(accelerations)
+        if axis != expected:
+            FAILURES.append(
+                f"impulse {accelerations}: got {axis} (confidence {confidence:.3f}, "
+                f"peak {peak:.3f}), want {expected}")
+
+    # 21. Octant coverage: eight sign combinations, eight distinct bins.
+    bins = {octant((sx, sy, sz)) for sx in (1, -1) for sy in (1, -1) for sz in (1, -1)}
+    check("octant count", float(len(bins)), 8.0, 0.0)
+    check("all-positive octant", float(octant((1, 1, 1))), 7.0, 0.0)
+    check("all-negative octant", float(octant((-1, -1, -1))), 0.0, 0.0)
 
     print()
     if FAILURES:

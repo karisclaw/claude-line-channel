@@ -8,15 +8,15 @@
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| **A1** | 位態座標轉換核心 + 單元測試 | ✅ 完成，待檢視 |
-| A2 | 取樣、靜止偵測、磁干擾品管、校正流程 | 尚未開始 |
+| **A1** | 位態座標轉換核心 + 單元測試 | ✅ 完成 |
+| **A2** | 取樣、靜止偵測、磁干擾品管、校正流程 | ✅ 完成，待檢視 |
 | A3 | LiDAR 非接觸式量測（ARKit + RANSAC） | 尚未開始 |
 | B | SwiftData 資料模型與野外紀錄 UI | 尚未開始 |
 | C | 群集分析（投影、分組、統計、圖形） | 尚未開始 |
 | D | 匯出（CSV/GeoJSON/KML/PDF/zip） | 尚未開始 |
 
-分階段交付，每階段結束停下來檢視。**目前停在 A1 結束**，
-`docs/conventions.md` 末尾有六個待確認的地質慣例問題。
+分階段交付，每階段結束停下來檢視。**目前停在 A2 結束**。
+A1 的六個地質慣例問題已確認，決策紀錄在 `docs/conventions.md`。
 
 ## 結構
 
@@ -32,6 +32,18 @@ ios-joint-attitude/
 `GeoStructuralKit` 不 import UIKit、SwiftUI、CoreMotion、CoreLocation 或 ARKit，
 只吃四元數、向量與角度這些純數字。App 層負責跟感測器打交道，
 把結果餵進來。因此整包可以在任何平台（含 Linux CI）跑測試。
+
+## A2 已實作
+
+- `MotionSample` — `CMDeviceMotion` 一帧的純資料形式（姿態、使用者加速度、角速度）
+- `StillnessDetector` — 滑動視窗靜止偵測，用加速度**向量**標準差 + 陀螺儀峰值
+- `BurstCollector` — 靜止後連續取樣的狀態機，收集中移動則整批丟棄重來；
+  輸出平均位態、角度標準差、實際到達率
+- `MagneticEnvironment` / `MagneticAssessment` — 場強與校正精度判定磁干擾，
+  並說明它只影響方位不影響傾角
+- `CalibrationCheck` — 水平／垂直／任意參考面檢核，誤差拆成重力與磁力兩部分
+- `MagnetometerCoverage` — 8 字形校正的八分區覆蓋率
+- `PlacementCrossCheck` — 由接觸衝量交叉檢查貼合面，**只警告不自動切換**
 
 ## A1 已實作
 
@@ -95,6 +107,12 @@ python3 tools/reference_check.py
 | `testDeclinationDerivedFromAHeadingPair` | 磁偏角跨越北方 0/360 時仍正確（單純相減會得到 350 而不是 −10）|
 | `testOutwardNormalPointsAwayFromTheRockNotIntoIt` | 手機立在水平面上時外法向量必須朝上 —— 位態斷言抓不到符號錯誤 |
 | `testOnlyThreeContactAxesCanChangeAnAttitude` | 六種貼法收斂成三個位態 |
+| `testSteadyRockingIsNotMistakenForStillness` | 等幅度擺動：幅度標準差 8.9e-18 g（會誤判靜止）vs 向量標準差 0.051 g |
+| `testMovementDuringTheBurstDiscardsItAndStartsAgain` | 叢集中途移動整批丟棄並自動重來 |
+| `testShortfallInSampleRateIsFlaggedNotHidden` | 到達率不足時打旗標而非隱藏 |
+| `testNegativeHeadingAccuracyMeansInvalidNotExcellent` | CoreLocation 用負值表示無效，不是精度極好 |
+| `testGentlePlacementProducesNoOpinion` | 輕放時交叉檢查不表態，不憑空指定軸 |
+| `testTheCheckOffersNoWayToOverrideTheSelection` | 交叉檢查沒有任何修正 API |
 | `testSignFlippedSamplesGiveTheSameMean` | 軸性平均：符號相反的樣本不會相消（對照組算術平均只剩 0.021） |
 | `testGirdleFabricEigenvalues` | 環帶型 fabric 的特徵值退化情況 |
 | `testARKitMappingPreservesHandedness` | ARKit 轉換行列式為 +1，不鏡射 |

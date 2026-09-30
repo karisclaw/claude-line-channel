@@ -68,3 +68,44 @@ func XCTAssertVectorEqual(
 
 /// The accuracy the project specification demands of the attitude conversion.
 let requiredAccuracyDegrees = 0.01
+
+// MARK: - Synthetic motion streams
+
+/// A deterministic pseudo-random source, so a failing motion test reproduces exactly.
+struct TestNoise {
+    private var state: UInt64
+
+    init(seed: UInt64 = 0x2545F4914F6CDD1D) { state = seed }
+
+    mutating func next() -> Double {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        return Double(state >> 11) / Double(1 << 53) * 2 - 1      // -1...1
+    }
+
+    mutating func vector(scale: Double) -> Vector3 {
+        Vector3(next() * scale, next() * scale, next() * scale)
+    }
+}
+
+/// A stream of motion samples at a fixed rate, all holding one attitude.
+///
+/// `rate` defaults to 64 Hz rather than 50 because 1/64 is exactly representable in
+/// binary: timestamps then add without rounding, so sample counts in the assertions are
+/// deterministic rather than off-by-one depending on the last bit.
+func motionStream(
+    attitude: Quaternion,
+    count: Int,
+    rate: Double = 64,
+    startingAt start: TimeInterval = 0,
+    userAcceleration: (Int) -> Vector3 = { _ in .zero },
+    rotationRate: (Int) -> Vector3 = { _ in .zero }
+) -> [MotionSample] {
+    (0..<count).map { index in
+        MotionSample(
+            timestamp: start + Double(index) / rate,
+            attitude: attitude,
+            userAcceleration: userAcceleration(index),
+            rotationRate: rotationRate(index)
+        )
+    }
+}
