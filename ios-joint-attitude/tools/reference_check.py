@@ -429,6 +429,77 @@ def impulse_axis(accelerations, minimum_peak=0.15, minimum_confidence=0.6):
     return (leading if confidence >= minimum_confidence else None), confidence, peak
 
 
+# ---- B: ISRM class boundaries (mirrors ISRMDescriptors.swift) ----
+#
+# Half-open throughout: a value exactly on a boundary belongs to the UPPER class.
+# ISRM writes its tables as "20-60 mm" without saying which end owns the boundary, so
+# this is a choice, applied the same way to every scale.
+
+SPACING_CLASSES_MM = [
+    ("extremelyClose", 0.0, 20.0),
+    ("veryClose", 20.0, 60.0),
+    ("close", 60.0, 200.0),
+    ("moderate", 200.0, 600.0),
+    ("wide", 600.0, 2000.0),
+    ("veryWide", 2000.0, 6000.0),
+    ("extremelyWide", 6000.0, math.inf),
+]
+
+PERSISTENCE_CLASSES_M = [
+    ("veryLow", 0.0, 1.0),
+    ("low", 1.0, 3.0),
+    ("medium", 3.0, 10.0),
+    ("high", 10.0, 20.0),
+    ("veryHigh", 20.0, math.inf),
+]
+
+# The published aperture table overlaps: "wide, > 10 mm" ends the gapped group while
+# "very wide, 1-10 cm" starts the open group, so a 50 mm aperture has two valid names.
+# The open-ended "wide" is dropped here and veryWide carries 10-100 mm.
+APERTURE_CLASSES_MM = [
+    ("veryTight", 0.0, 0.1),
+    ("tight", 0.1, 0.25),
+    ("partlyOpen", 0.25, 0.5),
+    ("open", 0.5, 2.5),
+    ("moderatelyWide", 2.5, 10.0),
+    ("veryWide", 10.0, 100.0),
+    ("extremelyWide", 100.0, 1000.0),
+    ("cavernous", 1000.0, math.inf),
+]
+
+ROUGHNESS_CLASSES = [
+    (waviness, profile, waviness_index * 3 + profile_index + 1)
+    for waviness_index, waviness in enumerate(("stepped", "undulating", "planar"))
+    for profile_index, profile in enumerate(("rough", "smooth", "slickensided"))
+]
+
+
+def classify(value, table):
+    """The one class whose half-open range holds `value`, or None."""
+    if not math.isfinite(value) or value < 0:
+        return None
+    for name, lower, upper in table:
+        if lower <= value < upper:
+            return name
+    return None
+
+
+def print_isrm_tables():
+    """Prints the boundaries for checking against a copy of ISRM (1978)."""
+    for title, table, unit in (
+        ("Spacing", SPACING_CLASSES_MM, "mm"),
+        ("Persistence", PERSISTENCE_CLASSES_M, "m"),
+        ("Aperture", APERTURE_CLASSES_MM, "mm"),
+    ):
+        print(f"  {title}:")
+        for name, lower, upper in table:
+            top = "and up" if upper == math.inf else f"< {upper:g}"
+            print(f"    {name:16s} {lower:>8g} {unit} .. {top} {unit if upper != math.inf else ''}")
+    print("  Roughness (ISRM I-IX):")
+    for waviness, profile, number in ROUGHNESS_CLASSES:
+        print(f"    {number:>2d}  {profile:14s} {waviness}")
+
+
 def octant(vector):
     return (1 if vector[0] >= 0 else 0) | (2 if vector[1] >= 0 else 0) | (4 if vector[2] >= 0 else 0)
 
@@ -808,6 +879,54 @@ def main():
     check("octant count", float(len(bins)), 8.0, 0.0)
     check("all-positive octant", float(octant((1, 1, 1))), 7.0, 0.0)
     check("all-negative octant", float(octant((-1, -1, -1))), 0.0, 0.0)
+
+    # 22. ISRM class boundaries: the tables tile their scale, with no gaps and no
+    #     overlaps. A gap or an overlap would make a classification depend on the order
+    #     the cases happen to be declared in - which is the defect in the published
+    #     aperture table.
+    for title, table, limit, step in (
+        ("spacing", SPACING_CLASSES_MM, 7000.0, 0.5),
+        ("persistence", PERSISTENCE_CLASSES_M, 25.0, 0.01),
+        ("aperture", APERTURE_CLASSES_MM, 1200.0, 0.05),
+    ):
+        value = 0.0
+        while value <= limit:
+            matches = [name for name, lower, upper in table if lower <= value < upper]
+            if len(matches) != 1:
+                FAILURES.append(f"{title} {value:g} matched {matches}")
+                break
+            value += step
+
+    boundary_cases = [
+        (SPACING_CLASSES_MM, 0.0, "extremelyClose"), (SPACING_CLASSES_MM, 20.0, "veryClose"),
+        (SPACING_CLASSES_MM, 60.0, "close"), (SPACING_CLASSES_MM, 200.0, "moderate"),
+        (SPACING_CLASSES_MM, 600.0, "wide"), (SPACING_CLASSES_MM, 2000.0, "veryWide"),
+        (SPACING_CLASSES_MM, 6000.0, "extremelyWide"),
+        (PERSISTENCE_CLASSES_M, 1.0, "low"), (PERSISTENCE_CLASSES_M, 3.0, "medium"),
+        (PERSISTENCE_CLASSES_M, 10.0, "high"), (PERSISTENCE_CLASSES_M, 20.0, "veryHigh"),
+        (APERTURE_CLASSES_MM, 0.1, "tight"), (APERTURE_CLASSES_MM, 0.25, "partlyOpen"),
+        (APERTURE_CLASSES_MM, 0.5, "open"), (APERTURE_CLASSES_MM, 2.5, "moderatelyWide"),
+        (APERTURE_CLASSES_MM, 10.0, "veryWide"), (APERTURE_CLASSES_MM, 100.0, "extremelyWide"),
+        (APERTURE_CLASSES_MM, 1000.0, "cavernous"),
+    ]
+    for table, value, expected in boundary_cases:
+        got = classify(value, table)
+        if got != expected:
+            FAILURES.append(f"boundary {value:g}: got {got}, want {expected}")
+
+    for table in (SPACING_CLASSES_MM, PERSISTENCE_CLASSES_M, APERTURE_CLASSES_MM):
+        for bad in (-1.0, float("nan"), math.inf):
+            if classify(bad, table) is not None:
+                FAILURES.append(f"{bad} should not classify")
+
+    numbers = [number for _, _, number in ROUGHNESS_CLASSES]
+    check("roughness class count", float(len(numbers)), 9.0, 0.0)
+    check("roughness numbers are 1..9", float(len(set(numbers))), 9.0, 0.0)
+    if numbers != list(range(1, 10)):
+        FAILURES.append(f"roughness numbering is {numbers}, want 1..9 in order")
+
+    print("ISRM class boundaries, for checking against the standard:")
+    print_isrm_tables()
 
     print()
     if FAILURES:

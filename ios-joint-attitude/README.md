@@ -11,20 +11,23 @@
 | **A1** | 位態座標轉換核心 + 單元測試 | ✅ 完成 |
 | **A2** | 取樣、靜止偵測、磁干擾品管、校正流程 | ✅ 完成，待檢視 |
 | A3 | LiDAR 非接觸式量測（ARKit + RANSAC） | 尚未開始 |
-| B | SwiftData 資料模型與野外紀錄 UI | 尚未開始 |
+| **B1** | 資料模型（值型別 + SwiftData） | ✅ 完成，待檢視 |
+| B2 | 野外紀錄 UI（單手、手套模式、藍牙音量鍵） | 尚未開始 |
 | C | 群集分析（投影、分組、統計、圖形） | 尚未開始 |
 | D | 匯出（CSV/GeoJSON/KML/PDF/zip） | 尚未開始 |
 
-分階段交付，每階段結束停下來檢視。**目前停在 A2 結束**。
+分階段交付，每階段結束停下來檢視。**目前停在 B1 結束**。
 A1 的六個地質慣例問題已確認，決策紀錄在 `docs/conventions.md`。
 
 ## 結構
 
 ```
 ios-joint-attitude/
-├── GeoStructuralKit/          Swift package，純運算，不依賴 UI 或任何 framework
-│   ├── Sources/OrientationCore/
-│   └── Tests/OrientationCoreTests/
+├── GeoStructuralKit/
+│   ├── Sources/OrientationCore/     A1+A2 位態與取樣，Foundation only
+│   ├── Sources/FieldRecord/         B 的值型別，Foundation only
+│   ├── Sources/FieldRecordStore/    SwiftData @Model，整檔 #if canImport(SwiftData)
+│   └── Tests/
 ├── docs/conventions.md        地質與座標慣例決策紀錄（含對原規格的一處修正）
 └── tools/reference_check.py   獨立的 Python 參考實作，交叉驗證 Swift 的數學
 ```
@@ -32,6 +35,17 @@ ios-joint-attitude/
 `GeoStructuralKit` 不 import UIKit、SwiftUI、CoreMotion、CoreLocation 或 ARKit，
 只吃四元數、向量與角度這些純數字。App 層負責跟感測器打交道，
 把結果餵進來。因此整包可以在任何平台（含 Linux CI）跑測試。
+
+## B1 已實作
+
+- `MeasurementRecord` / `StationRecord` / `ProjectRecord` — 純值型別，可測、可匯出
+- ISRM 描述欄位 — 粗糙度（I–IX + JRC）、張開度、充填物、風化（W1–W6）、
+  含水（I–V）、延續性、間距、端點；**每個級距界線都寫成數值範圍並有測試釘住**
+- `ApertureObservation` 等 — 區分「量測值」與「目測分級」，不壓平成同一個欄位
+- `SurveyGeometry` — scanline / window / selective，供 Terzaghi 修正
+- `CarryForwardPolicy` — 複製上一筆設定，並明確規定六件永不繼承的東西
+- `MeasurementLocation` — 包含 `CLLocation` 負精度代表無效的處理
+- `FieldRecordStore` — SwiftData `@Model`，每個模型存「一個 blob + 幾個查詢欄」
 
 ## A2 已實作
 
@@ -113,6 +127,10 @@ python3 tools/reference_check.py
 | `testNegativeHeadingAccuracyMeansInvalidNotExcellent` | CoreLocation 用負值表示無效，不是精度極好 |
 | `testGentlePlacementProducesNoOpinion` | 輕放時交叉檢查不表態，不憑空指定軸 |
 | `testTheCheckOffersNoWayToOverrideTheSelection` | 交叉檢查沒有任何修正 API |
+| `testClassesTileTheirScaleWithoutGapsOrOverlaps` | ISRM 級距不重疊不留縫（原張開度表有重疊） |
+| `testTheAttitudeIsNeverCarriedForward` | 三種 carry-forward 政策都不繼承位態 |
+| `testNegativeAccuracyMeansNoFixNotAPerfectOne` | `CLLocation` 負精度代表無定位，不是精度極佳 |
+| `testEstimatedObservationHasNoMeasuredValue` | 目測分級不會憑空產生一個數字 |
 | `testSignFlippedSamplesGiveTheSameMean` | 軸性平均：符號相反的樣本不會相消（對照組算術平均只剩 0.021） |
 | `testGirdleFabricEigenvalues` | 環帶型 fabric 的特徵值退化情況 |
 | `testARKitMappingPreservesHandedness` | ARKit 轉換行列式為 +1，不鏡射 |
