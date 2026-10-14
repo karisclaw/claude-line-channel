@@ -467,6 +467,51 @@ APERTURE_CLASSES_MM = [
     ("cavernous", 1000.0, math.inf),
 ]
 
+# ISRM gives TWO seepage tables. Both run I-V, but a rating means different things on
+# each, so a stored reading has to say which table it came from.
+UNFILLED_SEEPAGE = [
+    (1, "tightAndDry"), (2, "dryWithEvidenceOfFlow"), (3, "damp"),
+    (4, "seepage"), (5, "continuousFlow"),
+]
+
+FILLED_SEEPAGE = [
+    (1, "fillingConsolidatedAndDry"), (2, "fillingDamp"),
+    (3, "fillingWetWithOccasionalDrops"),
+    (4, "fillingShowsOutwashWithContinuousFlow"), (5, "fillingWashedOutWithHeavyFlow"),
+]
+
+# The published open-ended aperture class, kept storable but never derived: its range
+# overlaps three of the others.
+APERTURE_LEGACY_WIDE = ("wide", 10.0, math.inf)
+
+DISCONTINUITY_TYPES = [
+    "joint", "sheetingJoint", "bedding", "fault", "faultZone", "shearZone",
+    "foliation", "schistosity", "cleavage", "vein", "tensionGash", "stylolite",
+    "unconformity", "intrusiveContact", "flowBanding",
+]
+
+ZONE_TYPES = {"faultZone", "shearZone"}
+
+SURVEY_GEOMETRIES = {
+    "scanline": "terzaghi",
+    "borehole": "terzaghi",
+    "window": "terzaghi",
+    "traceMap": "terzaghi",
+    "surfaceModel": "areaWeightedSurface",
+    "selective": "unavailable",
+}
+
+
+def discontinuity_storage_key(case, label=None):
+    return f"other:{label}" if case == "other" else case
+
+
+def discontinuity_from_storage_key(key):
+    if key.startswith("other:"):
+        return ("other", key[len("other:"):])
+    return (key, None) if key in DISCONTINUITY_TYPES else None
+
+
 ROUGHNESS_CLASSES = [
     (waviness, profile, waviness_index * 3 + profile_index + 1)
     for waviness_index, waviness in enumerate(("stepped", "undulating", "planar"))
@@ -495,9 +540,17 @@ def print_isrm_tables():
         for name, lower, upper in table:
             top = "and up" if upper == math.inf else f"< {upper:g}"
             print(f"    {name:16s} {lower:>8g} {unit} .. {top} {unit if upper != math.inf else ''}")
+    print(f"    {APERTURE_LEGACY_WIDE[0]:16s} {APERTURE_LEGACY_WIDE[1]:>8g} mm .. and up"
+          "   (published, storable, never derived)")
     print("  Roughness (ISRM I-IX):")
     for waviness, profile, number in ROUGHNESS_CLASSES:
         print(f"    {number:>2d}  {profile:14s} {waviness}")
+    print("  Seepage, unfilled discontinuity (I-V):")
+    for rating, name in UNFILLED_SEEPAGE:
+        print(f"    {rating}  {name}")
+    print("  Seepage, filled discontinuity (I-V):")
+    for rating, name in FILLED_SEEPAGE:
+        print(f"    {rating}  {name}")
 
 
 def octant(vector):
@@ -924,6 +977,57 @@ def main():
     check("roughness numbers are 1..9", float(len(set(numbers))), 9.0, 0.0)
     if numbers != list(range(1, 10)):
         FAILURES.append(f"roughness numbering is {numbers}, want 1..9 in order")
+
+    # 23. Both seepage tables are numbered I-V and must stay distinguishable.
+    check("unfilled seepage ratings", float(len(UNFILLED_SEEPAGE)), 5.0, 0.0)
+    check("filled seepage ratings", float(len(FILLED_SEEPAGE)), 5.0, 0.0)
+    if [r for r, _ in UNFILLED_SEEPAGE] != [1, 2, 3, 4, 5]:
+        FAILURES.append("unfilled seepage ratings are not 1..5 in order")
+    if [r for r, _ in FILLED_SEEPAGE] != [1, 2, 3, 4, 5]:
+        FAILURES.append("filled seepage ratings are not 1..5 in order")
+    unfilled_names = {name for _, name in UNFILLED_SEEPAGE}
+    filled_names = {name for _, name in FILLED_SEEPAGE}
+    if unfilled_names & filled_names:
+        FAILURES.append(f"the two seepage tables share case names: {unfilled_names & filled_names}")
+
+    # 24. The legacy aperture class really does overlap, which is why it is not derivable.
+    overlapping = [
+        name for name, lower, upper in APERTURE_CLASSES_MM
+        if name != "wide" and lower < APERTURE_LEGACY_WIDE[2] and APERTURE_LEGACY_WIDE[1] < upper
+    ]
+    if set(overlapping) != {"veryWide", "extremelyWide", "cavernous"}:
+        FAILURES.append(f"legacy 'wide' overlaps {overlapping}, expected the three open classes")
+    if classify(50.0, APERTURE_CLASSES_MM) != "veryWide":
+        FAILURES.append("50 mm must derive veryWide, not the legacy class")
+
+    # 25. Discontinuity type storage keys round trip, including a labelled `other`.
+    if len(set(DISCONTINUITY_TYPES)) != len(DISCONTINUITY_TYPES):
+        FAILURES.append("duplicate discontinuity type key")
+    check("discontinuity type count", float(len(DISCONTINUITY_TYPES)), 15.0, 0.0)
+    for case in DISCONTINUITY_TYPES:
+        if discontinuity_from_storage_key(discontinuity_storage_key(case)) != (case, None):
+            FAILURES.append(f"type key {case} did not round trip")
+        if ":" in case:
+            FAILURES.append(f"standard key {case} must not look like other:…")
+    for label in ("擠壓帶", "", "zone: sheared"):
+        key = discontinuity_storage_key("other", label)
+        if discontinuity_from_storage_key(key) != ("other", label):
+            FAILURES.append(f"other label {label!r} did not round trip through {key!r}")
+    for bad_key in ("sandwich", "", "Joint"):
+        if discontinuity_from_storage_key(bad_key) is not None:
+            FAILURES.append(f"{bad_key!r} should not resolve to a type")
+    check("zone type count", float(len(ZONE_TYPES & set(DISCONTINUITY_TYPES))), 2.0, 0.0)
+    if "fault" in ZONE_TYPES:
+        FAILURES.append("a discrete fault surface is not a zone")
+
+    # 26. Every survey geometry names a correction method, and only the surface model
+    #     asks for the area-weighted one.
+    for name, method in SURVEY_GEOMETRIES.items():
+        if method not in ("terzaghi", "areaWeightedSurface", "unavailable"):
+            FAILURES.append(f"{name} names an unknown correction method {method}")
+    area_weighted = {n for n, m in SURVEY_GEOMETRIES.items() if m == "areaWeightedSurface"}
+    if area_weighted != {"surfaceModel"}:
+        FAILURES.append(f"area-weighted correction claimed by {area_weighted}")
 
     print("ISRM class boundaries, for checking against the standard:")
     print_isrm_tables()

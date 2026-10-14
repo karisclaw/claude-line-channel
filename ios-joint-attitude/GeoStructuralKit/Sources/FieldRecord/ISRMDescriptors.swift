@@ -97,14 +97,23 @@ public struct JointRoughnessCoefficient: Equatable, Hashable, Sendable, Codable 
 ///
 /// The published table overlaps: it lists "wide, > 10 mm" at the end of the gapped group
 /// and "very wide, 1–10 cm" at the start of the open group, so a 50 mm aperture has two
-/// valid names. The bins here are made non-overlapping by dropping the open-ended
-/// "wide" and letting `veryWide` carry 10–100 mm. Flagged rather than silently chosen.
+/// valid names there. Both are kept, but they are not treated alike:
+///
+/// - ``wide`` exists so a value copied from a notebook written against the published
+///   table can be stored as it was written, without being quietly reinterpreted.
+/// - It is **not** in ``derivable``, so ``init(millimetres:)`` never produces it. A
+///   measurement of 50 mm becomes ``veryWide``, deterministically.
+///
+/// Without that split, classifying a measurement would depend on the order the cases
+/// happen to be declared in.
 public enum ApertureClass: String, CaseIterable, Sendable, Codable {
     case veryTight
     case tight
     case partlyOpen
     case open
     case moderatelyWide
+    /// Published as "wide, > 10 mm". Storable, never derived — see the type's note.
+    case wide
     case veryWide
     case extremelyWide
     case cavernous
@@ -117,6 +126,7 @@ public enum ApertureClass: String, CaseIterable, Sendable, Codable {
         case .partlyOpen: 0.25..<0.5
         case .open: 0.5..<2.5
         case .moderatelyWide: 2.5..<10
+        case .wide: 10..<Double.infinity        // the published open-ended class
         case .veryWide: 10..<100
         case .extremelyWide: 100..<1000
         case .cavernous: 1000..<Double.infinity
@@ -133,13 +143,21 @@ public enum ApertureClass: String, CaseIterable, Sendable, Codable {
     public var group: Group {
         switch self {
         case .veryTight, .tight, .partlyOpen: .closed
-        case .open, .moderatelyWide: .gapped
+        case .open, .moderatelyWide, .wide: .gapped
         case .veryWide, .extremelyWide, .cavernous: .open
         }
     }
 
+    /// The non-overlapping classes a measurement may be turned into. Excludes ``wide``,
+    /// whose published range covers three of the others.
+    public static let derivable: [ApertureClass] = allCases.filter { $0 != .wide }
+
+    /// `true` for a class that can only have come from a notebook, not from a
+    /// measurement taken by this app.
+    public var isLegacyPublishedClass: Bool { self == .wide }
+
     public init?(millimetres value: Double) {
-        guard let match = ApertureClass.allCases.first(where: { $0.millimetreRange.contains(value) })
+        guard let match = ApertureClass.derivable.first(where: { $0.millimetreRange.contains(value) })
         else { return nil }
         self = match
     }
@@ -223,17 +241,13 @@ public enum WeatheringGrade: String, CaseIterable, Sendable, Codable {
 
 // MARK: - Water
 
-/// ISRM seepage ratings I–V, for a discontinuity **without** filling.
-///
-/// ISRM gives a second table for filled discontinuities. This is the unfilled scale; if
-/// you want both, say so and the filled scale goes in alongside it rather than being
-/// squeezed into the same five cases.
-public enum SeepageRating: String, CaseIterable, Sendable, Codable {
-    /// I — tight and dry, no water flow possible.
-    case dryTight
-    /// II — dry, but evidence of past flow such as staining.
+/// ISRM seepage ratings I–V for a discontinuity **without** filling.
+public enum UnfilledSeepageRating: String, CaseIterable, Sendable, Codable {
+    /// I — the discontinuity is tight and dry; water flow is not possible.
+    case tightAndDry
+    /// II — dry, but with evidence of past flow such as staining.
     case dryWithEvidenceOfFlow
-    /// III — damp, no free water.
+    /// III — damp, with no free water.
     case damp
     /// IV — seepage, occasional drops.
     case seepage
@@ -243,7 +257,7 @@ public enum SeepageRating: String, CaseIterable, Sendable, Codable {
     /// Rating number, `1...5`.
     public var rating: Int {
         switch self {
-        case .dryTight: 1
+        case .tightAndDry: 1
         case .dryWithEvidenceOfFlow: 2
         case .damp: 3
         case .seepage: 4
@@ -251,12 +265,79 @@ public enum SeepageRating: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    public var romanNumeral: String { ["I", "II", "III", "IV", "V"][rating - 1] }
-
     public init?(rating: Int) {
-        guard let match = SeepageRating.allCases.first(where: { $0.rating == rating })
+        guard let match = UnfilledSeepageRating.allCases.first(where: { $0.rating == rating })
         else { return nil }
         self = match
+    }
+}
+
+/// ISRM seepage ratings I–V for a **filled** discontinuity.
+///
+/// A separate scale, not a relabelling: these ratings describe the state of the filling
+/// rather than of an open gap, so rating III means "filling wet, occasional drops" here
+/// and "damp, no free water" on the unfilled scale. Keeping them as one enum with a
+/// flag, or as a bare number, would make a stored `III` ambiguous — which table it came
+/// from could no longer be recovered.
+public enum FilledSeepageRating: String, CaseIterable, Sendable, Codable {
+    /// I — filling heavily consolidated and dry; flow unlikely, permeability very low.
+    case fillingConsolidatedAndDry
+    /// II — filling damp, but no free water.
+    case fillingDamp
+    /// III — filling wet, occasional drops of water.
+    case fillingWetWithOccasionalDrops
+    /// IV — filling shows signs of outwash, with continuous flow; record the rate.
+    case fillingShowsOutwashWithContinuousFlow
+    /// V — filling locally washed out, with considerable flow along the channels;
+    /// record the rate and describe the pressure.
+    case fillingWashedOutWithHeavyFlow
+
+    /// Rating number, `1...5`.
+    public var rating: Int {
+        switch self {
+        case .fillingConsolidatedAndDry: 1
+        case .fillingDamp: 2
+        case .fillingWetWithOccasionalDrops: 3
+        case .fillingShowsOutwashWithContinuousFlow: 4
+        case .fillingWashedOutWithHeavyFlow: 5
+        }
+    }
+
+    public init?(rating: Int) {
+        guard let match = FilledSeepageRating.allCases.first(where: { $0.rating == rating })
+        else { return nil }
+        self = match
+    }
+}
+
+/// A seepage observation, carrying which of ISRM's two tables it was read from.
+///
+/// Self-describing on purpose: the rating number alone does not say which scale applied,
+/// and the two scales mean different things at the same number.
+public enum SeepageObservation: Equatable, Hashable, Sendable, Codable {
+    case unfilled(UnfilledSeepageRating)
+    case filled(FilledSeepageRating)
+
+    /// Rating number, `1...5`, on whichever scale applies.
+    public var rating: Int {
+        switch self {
+        case .unfilled(let value): value.rating
+        case .filled(let value): value.rating
+        }
+    }
+
+    public var romanNumeral: String { ["I", "II", "III", "IV", "V"][rating - 1] }
+
+    /// `true` when the filled-discontinuity scale was used.
+    public var usesFilledScale: Bool {
+        if case .filled = self { return true }
+        return false
+    }
+
+    /// Rating with its scale, e.g. `III (filled)` — the form to put in a report, since
+    /// a bare `III` is ambiguous.
+    public var qualifiedDescription: String {
+        "\(romanNumeral) (\(usesFilledScale ? "filled" : "unfilled"))"
     }
 }
 

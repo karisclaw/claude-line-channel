@@ -31,7 +31,7 @@ final class MeasurementRecordTests: XCTestCase {
                 aperture: .measured(millimetres: 0.4),
                 infilling: .clean,
                 weathering: .slightlyWeathered,
-                seepage: .damp,
+                seepage: .unfilled(.damp),
                 persistence: .measured(metres: 4.5),
                 spacing: .measured(millimetres: 320),
                 termination: .terminatesInRock
@@ -165,38 +165,87 @@ final class MeasurementLocationTests: XCTestCase {
 
 final class SurveyGeometryTests: XCTestCase {
 
-    func testScanlineSamplesAlongItsOwnDirection() {
+    /// The one-dimensional geometries sample along their own direction.
+    func testScanlineAndBoreholeSampleAlongTheirOwnDirection() {
         let line = LineOrientation(trend: 45, plunge: 10)
-        let geometry = SurveyGeometry.scanline(line: line, lengthMetres: 20)
-        XCTAssertTrue(geometry.supportsTerzaghiCorrection)
-        XCTAssertEqual(geometry.samplingDirection, line.downPlungeVector)
+        for geometry in [
+            SurveyGeometry.scanline(line: line, lengthMetres: 20),
+            SurveyGeometry.borehole(axis: line, lengthMetres: 20)
+        ] {
+            XCTAssertEqual(geometry.biasCorrectionMethod, .terzaghi)
+            XCTAssertEqual(geometry.samplingDirection, line.downPlungeVector)
+            XCTAssertEqual(geometry.sampledLengthMetres, 20)
+            XCTAssertNil(geometry.sampledAreaSquareMetres)
+            XCTAssertNil(geometry.surfaceFacets)
+        }
     }
 
-    func testWindowSamplesAlongItsFaceNormal() {
+    /// The two-dimensional geometries sample along their face normal. A photogrammetric
+    /// trace map on a planar face is corrected exactly like a hand-mapped window; the
+    /// cases differ only in what the record says about how the traces were obtained.
+    func testWindowAndTraceMapSampleAlongTheirFaceNormal() {
         let face = PlaneOrientation(dip: 80, dipDirection: 200)
-        let geometry = SurveyGeometry.window(face: face, areaSquareMetres: 30)
-        XCTAssertTrue(geometry.supportsTerzaghiCorrection)
-        XCTAssertEqual(geometry.samplingDirection, face.upwardNormal)
+        for geometry in [
+            SurveyGeometry.window(face: face, areaSquareMetres: 30),
+            SurveyGeometry.traceMap(face: face, areaSquareMetres: 30)
+        ] {
+            XCTAssertEqual(geometry.biasCorrectionMethod, .terzaghi)
+            XCTAssertEqual(geometry.samplingDirection, face.upwardNormal)
+            XCTAssertEqual(geometry.sampledAreaSquareMetres, 30)
+            XCTAssertNil(geometry.sampledLengthMetres)
+        }
+    }
+
+    /// A surface model has no single sampling direction, so the classical Terzaghi
+    /// weight does not apply. It asks for the area-weighted method instead and carries
+    /// the facets that method needs — rather than returning a Terzaghi direction that
+    /// would produce a confident, wrong weight.
+    func testSurfaceModelAsksForTheAreaWeightedMethod() {
+        let facets = [
+            SurfaceFacet(orientation: PlaneOrientation(dip: 80, dipDirection: 10), areaSquareMetres: 12),
+            SurfaceFacet(orientation: PlaneOrientation(dip: 20, dipDirection: 200), areaSquareMetres: 8)
+        ]
+        let geometry = SurveyGeometry.surfaceModel(facets: facets)
+        XCTAssertEqual(geometry.biasCorrectionMethod, .areaWeightedSurface)
+        XCTAssertNil(geometry.samplingDirection, "there is no one direction to correct against")
+        XCTAssertEqual(geometry.surfaceFacets?.count, 2)
+        XCTAssertEqual(geometry.sampledAreaSquareMetres, 20)
     }
 
     /// Selective sampling cannot be bias-corrected: the bias is in the geologist's
     /// choice, and no geometry describes it. Saying so is better than offering a weight
     /// that looks like a correction.
     func testSelectiveSamplingCannotBeCorrected() {
-        XCTAssertFalse(SurveyGeometry.selective.supportsTerzaghiCorrection)
+        XCTAssertEqual(SurveyGeometry.selective.biasCorrectionMethod, .unavailable)
         XCTAssertNil(SurveyGeometry.selective.samplingDirection)
+        XCTAssertNil(SurveyGeometry.selective.sampledLengthMetres)
+        XCTAssertNil(SurveyGeometry.selective.sampledAreaSquareMetres)
     }
 
     func testSurveyGeometrySurvivesStorage() throws {
         let values: [SurveyGeometry] = [
             .scanline(line: LineOrientation(trend: 120, plunge: 5), lengthMetres: 15),
+            .borehole(axis: LineOrientation(trend: 0, plunge: 90), lengthMetres: 40),
             .window(face: PlaneOrientation(dip: 75, dipDirection: 10), areaSquareMetres: 24),
+            .traceMap(face: PlaneOrientation(dip: 75, dipDirection: 10), areaSquareMetres: 24),
+            .surfaceModel(facets: [
+                SurfaceFacet(orientation: PlaneOrientation(dip: 60, dipDirection: 90), areaSquareMetres: 5)
+            ]),
             .selective
         ]
         for value in values {
             let data = try JSONEncoder().encode(value)
             XCTAssertEqual(try JSONDecoder().decode(SurveyGeometry.self, from: data), value)
         }
+    }
+
+    /// A vertical borehole is nearly blind to horizontal joints, which is the strongest
+    /// sampling bias in the project and the reason provenance is kept.
+    func testVerticalBoreholeSamplesAlongVertical() {
+        let geometry = SurveyGeometry.borehole(
+            axis: LineOrientation(trend: 0, plunge: 90), lengthMetres: 40
+        )
+        XCTAssertEqual(geometry.samplingDirection!.up, -1, accuracy: 1e-9)
     }
 }
 
@@ -347,7 +396,7 @@ final class ProjectAndStationTests: XCTestCase {
             outcropFace: PlaneOrientation(dip: 85, dipDirection: 120)
         )
         XCTAssertEqual(station.name, "ST-03")
-        XCTAssertTrue(station.defaultSurveyGeometry!.supportsTerzaghiCorrection)
+        XCTAssertEqual(station.defaultSurveyGeometry!.biasCorrectionMethod, .terzaghi)
     }
 
     func testRecordsSurviveStorage() throws {

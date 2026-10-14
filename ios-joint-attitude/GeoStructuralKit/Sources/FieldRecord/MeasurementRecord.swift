@@ -161,4 +161,12 @@ public struct MeasurementRecord: Identifiable, Equatable, Sendable, Codable {
 
     /// `true` when the record carries an attitude at all.
     public var hasAttitude: Bool { plane != nil || lineation != nil }
+
+    /// Everything inconsistent between the description and the type of discontinuity.
+    ///
+    /// Warnings for the UI, never corrections. The geologist is at the outcrop and this
+    /// code is not, so a disagreement is a prompt to look again.
+    public var inconsistencies: [DescriptionInconsistency] {
+        isrm.inconsistencies(for: discontinuityType)
+    }
 }

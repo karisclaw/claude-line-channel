@@ -40,7 +40,11 @@ ios-joint-attitude/
 
 - `MeasurementRecord` / `StationRecord` / `ProjectRecord` — 純值型別，可測、可匯出
 - ISRM 描述欄位 — 粗糙度（I–IX + JRC）、張開度、充填物、風化（W1–W6）、
-  含水（I–V）、延續性、間距、端點；**每個級距界線都寫成數值範圍並有測試釘住**
+  **含水（無充填／有充填兩張表，各 I–V，不可混淆）**、延續性、間距、端點；
+  **每個級距界線都寫成數值範圍並有測試釘住**
+- `DiscontinuityType` — 15 種標準類型 + `other(String)`；帶狀類型另有厚度欄位
+- `SurveyGeometry` — 測線／鑽孔／測窗／trace map／3D 表面模型／選擇性，
+  各自標示適用的偏壓修正方法
 - `ApertureObservation` 等 — 區分「量測值」與「目測分級」，不壓平成同一個欄位
 - `SurveyGeometry` — scanline / window / selective，供 Terzaghi 修正
 - `CarryForwardPolicy` — 複製上一筆設定，並明確規定六件永不繼承的東西
@@ -131,6 +135,10 @@ python3 tools/reference_check.py
 | `testTheAttitudeIsNeverCarriedForward` | 三種 carry-forward 政策都不繼承位態 |
 | `testNegativeAccuracyMeansNoFixNotAPerfectOne` | `CLLocation` 負精度代表無定位，不是精度極佳 |
 | `testEstimatedObservationHasNoMeasuredValue` | 目測分級不會憑空產生一個數字 |
+| `testSeepageObservationCarriesWhichScaleWasUsed` | 兩張含水表共用評等號，存下來的值自己說明來自哪張 |
+| `testSeepageScaleIsCheckedAgainstTheRecordedFilling` | 用錯表會被回報 |
+| `testTheOverlappingPublishedApertureClassIsStorableButNeverDerived` | 原表重疊的 `wide` 可存不可導出 |
+| `testSurfaceModelAsksForTheAreaWeightedMethod` | 3D 表面模型不回傳 Terzaghi 方向 |
 | `testSignFlippedSamplesGiveTheSameMean` | 軸性平均：符號相反的樣本不會相消（對照組算術平均只剩 0.021） |
 | `testGirdleFabricEigenvalues` | 環帶型 fabric 的特徵值退化情況 |
 | `testARKitMappingPreservesHandedness` | ARKit 轉換行列式為 +1，不鏡射 |

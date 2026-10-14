@@ -1,19 +1,136 @@
 import Foundation
 
 /// The kind of discontinuity a measurement is of.
-public enum DiscontinuityType: String, CaseIterable, Sendable, Codable {
+///
+/// The standard cases are the ones worth making queryable and comparable across
+/// projects; `other` carries anything else as free text rather than forcing a
+/// taxonomy on a site that does not fit it. The Chinese term is given for each so the
+/// UI has one place to read them from.
+///
+/// Encoded as its ``storageKey`` — a plain string — rather than through the synthesized
+/// representation for an enum with an associated value, because this value appears as a
+/// database column and in exported files, where `{"joint":{}}` would be both ugly and
+/// fragile.
+public enum DiscontinuityType: Equatable, Hashable, Sendable {
+
     /// 節理 — a joint, with no visible displacement.
     case joint
+    /// 席狀節理／解壓節理 — a sheeting joint, formed by unloading, typically slope-parallel.
+    case sheetingJoint
     /// 層面 — a bedding plane.
     case bedding
-    /// 斷層 — a fault, with displacement.
+    /// 斷層 — a discrete fault surface, with displacement.
     case fault
+    /// 斷層帶 — a fault zone: a thickness of broken rock or gouge, not one surface.
+    case faultZone
+    /// 剪裂帶 — a shear zone, with distributed strain across a thickness.
+    case shearZone
     /// 葉理 — foliation in a metamorphic rock.
     case foliation
+    /// 片理 — schistosity, where it is worth distinguishing from foliation generally.
+    case schistosity
     /// 劈理 — cleavage.
     case cleavage
-    /// 脈 — a vein or a mineral-filled fracture.
+    /// 脈 — a vein, a mineral-filled fracture.
     case vein
+    /// 張裂隙 — a tension gash, usually mineral-filled and en échelon.
+    case tensionGash
+    /// 縫合線 — a stylolite, a dissolution seam.
+    case stylolite
+    /// 不整合面 — an unconformity.
+    case unconformity
+    /// 侵入接觸面 — an intrusive contact.
+    case intrusiveContact
+    /// 流面 — flow banding in a volcanic rock.
+    case flowBanding
+    /// Anything else, named in the field. The text is kept verbatim.
+    case other(String)
+
+    /// Every case except ``other``, in the order to offer them.
+    public static let standardCases: [DiscontinuityType] = [
+        .joint, .sheetingJoint, .bedding, .fault, .faultZone, .shearZone,
+        .foliation, .schistosity, .cleavage, .vein, .tensionGash, .stylolite,
+        .unconformity, .intrusiveContact, .flowBanding
+    ]
+
+    /// The cases a field picker should show before the "more" disclosure.
+    ///
+    /// Not a judgement about which rocks matter: it is a judgement about a cold hand on
+    /// a small screen. Every extra row on the first screen slows down every
+    /// measurement, including the ones that only ever use `joint`.
+    public static let commonCases: [DiscontinuityType] = [
+        .joint, .bedding, .fault, .foliation, .vein
+    ]
+
+    /// Stable key for database columns, predicates and exported files.
+    ///
+    /// `other` is encoded as `other:<text>`, so the label survives a round trip rather
+    /// than collapsing every unusual feature into one bucket.
+    public var storageKey: String {
+        switch self {
+        case .joint: "joint"
+        case .sheetingJoint: "sheetingJoint"
+        case .bedding: "bedding"
+        case .fault: "fault"
+        case .faultZone: "faultZone"
+        case .shearZone: "shearZone"
+        case .foliation: "foliation"
+        case .schistosity: "schistosity"
+        case .cleavage: "cleavage"
+        case .vein: "vein"
+        case .tensionGash: "tensionGash"
+        case .stylolite: "stylolite"
+        case .unconformity: "unconformity"
+        case .intrusiveContact: "intrusiveContact"
+        case .flowBanding: "flowBanding"
+        case .other(let label): "other:\(label)"
+        }
+    }
+
+    public init?(storageKey key: String) {
+        if key.hasPrefix("other:") {
+            self = .other(String(key.dropFirst("other:".count)))
+            return
+        }
+        guard let match = DiscontinuityType.standardCases.first(where: { $0.storageKey == key })
+        else { return nil }
+        self = match
+    }
+
+    /// `true` for the types that occupy a **thickness** rather than a single surface.
+    ///
+    /// A fault zone or a shear zone measured as though it were one plane loses the
+    /// quantity an engineer asks about first. ``DiscontinuityDescription/zoneThicknessMetres``
+    /// is where that goes, and ``DiscontinuityDescription/zoneThicknessIssue(for:)``
+    /// says when it is missing or when it has been filled in for something that has no
+    /// thickness.
+    public var isZone: Bool {
+        switch self {
+        case .faultZone, .shearZone: true
+        default: false
+        }
+    }
+}
+
+extension DiscontinuityType: Codable {
+
+    public init(from decoder: any Decoder) throws {
+        let key = try decoder.singleValueContainer().decode(String.self)
+        guard let value = DiscontinuityType(storageKey: key) else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "unknown discontinuity type '\(key)'"
+                )
+            )
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(storageKey)
+    }
 }
 
 /// How an attitude was obtained.

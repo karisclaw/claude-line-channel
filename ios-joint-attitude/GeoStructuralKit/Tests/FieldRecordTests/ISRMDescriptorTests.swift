@@ -66,6 +66,8 @@ final class ISRMBoundaryTests: XCTestCase {
     /// would make a classification depend on the order the cases happen to be declared
     /// in — which is exactly the defect in the published aperture table.
     func testClassesTileTheirScaleWithoutGapsOrOverlaps() {
+        // The aperture scale tiles only across `derivable`: the published open-ended
+        // `wide` deliberately overlaps three of the others.
         for value in stride(from: 0.0, through: 7000.0, by: 0.5) {
             let matches = SpacingClass.allCases.filter { $0.millimetreRange.contains(value) }
             XCTAssertEqual(matches.count, 1, "spacing \(value) mm matched \(matches)")
@@ -75,9 +77,36 @@ final class ISRMBoundaryTests: XCTestCase {
             XCTAssertEqual(matches.count, 1, "persistence \(value) m matched \(matches)")
         }
         for value in stride(from: 0.0, through: 1200.0, by: 0.05) {
-            let matches = ApertureClass.allCases.filter { $0.millimetreRange.contains(value) }
+            let matches = ApertureClass.derivable.filter { $0.millimetreRange.contains(value) }
             XCTAssertEqual(matches.count, 1, "aperture \(value) mm matched \(matches)")
         }
+    }
+
+    /// The published "wide, > 10 mm" is kept so a notebook value can be stored as it was
+    /// written, but it is never produced from a measurement — otherwise classifying
+    /// 50 mm would depend on the order the cases are declared in.
+    func testTheOverlappingPublishedApertureClassIsStorableButNeverDerived() {
+        XCTAssertTrue(ApertureClass.allCases.contains(.wide))
+        XCTAssertFalse(ApertureClass.derivable.contains(.wide))
+        XCTAssertTrue(ApertureClass.wide.isLegacyPublishedClass)
+        XCTAssertFalse(ApertureClass.veryWide.isLegacyPublishedClass)
+
+        // Its published range really does overlap the others, which is why it is excluded.
+        XCTAssertTrue(ApertureClass.wide.millimetreRange.contains(50))
+        XCTAssertTrue(ApertureClass.veryWide.millimetreRange.contains(50))
+
+        for millimetres in [10.0, 50.0, 99.0, 500.0, 5000.0] {
+            XCTAssertNotEqual(
+                ApertureClass(millimetres: millimetres), .wide,
+                "a measurement of \(millimetres) mm must not derive the legacy class"
+            )
+        }
+        XCTAssertEqual(ApertureClass(millimetres: 50), .veryWide)
+
+        // It can still be stored and read back, which is the point of keeping it.
+        let data = try! JSONEncoder().encode(ApertureClass.wide)
+        XCTAssertEqual(try! JSONDecoder().decode(ApertureClass.self, from: data), .wide)
+        XCTAssertEqual(ApertureClass.wide.group, .gapped)
     }
 
     func testNonsensicalValuesAreRejectedRatherThanClamped() {
@@ -115,12 +144,43 @@ final class ISRMBoundaryTests: XCTestCase {
         XCTAssertEqual(Set(WeatheringGrade.allCases.map(\.grade)), Set(1...6))
     }
 
-    func testSeepageRatings() {
-        XCTAssertEqual(SeepageRating.dryTight.romanNumeral, "I")
-        XCTAssertEqual(SeepageRating.continuousFlow.romanNumeral, "V")
-        XCTAssertEqual(SeepageRating(rating: 4), .seepage)
-        XCTAssertNil(SeepageRating(rating: 6))
-        XCTAssertEqual(Set(SeepageRating.allCases.map(\.rating)), Set(1...5))
+    func testBothSeepageScalesAreNumberedOneToFive() {
+        XCTAssertEqual(Set(UnfilledSeepageRating.allCases.map(\.rating)), Set(1...5))
+        XCTAssertEqual(Set(FilledSeepageRating.allCases.map(\.rating)), Set(1...5))
+        XCTAssertEqual(UnfilledSeepageRating(rating: 4), .seepage)
+        XCTAssertEqual(FilledSeepageRating(rating: 3), .fillingWetWithOccasionalDrops)
+        XCTAssertNil(UnfilledSeepageRating(rating: 6))
+        XCTAssertNil(FilledSeepageRating(rating: 0))
+    }
+
+    /// The two scales share their numbers but not their meanings, so a stored reading
+    /// has to say which table it came from. Rating III is "damp, no free water" on one
+    /// and "filling wet, occasional drops" on the other.
+    func testSeepageObservationCarriesWhichScaleWasUsed() {
+        let unfilled = SeepageObservation.unfilled(.damp)
+        let filled = SeepageObservation.filled(.fillingWetWithOccasionalDrops)
+
+        XCTAssertEqual(unfilled.rating, 3)
+        XCTAssertEqual(filled.rating, 3)
+        XCTAssertEqual(unfilled.romanNumeral, "III")
+        XCTAssertEqual(filled.romanNumeral, "III")
+        XCTAssertNotEqual(unfilled, filled, "same number, different reading")
+
+        XCTAssertFalse(unfilled.usesFilledScale)
+        XCTAssertTrue(filled.usesFilledScale)
+        XCTAssertEqual(unfilled.qualifiedDescription, "III (unfilled)")
+        XCTAssertEqual(filled.qualifiedDescription, "III (filled)")
+    }
+
+    func testSeepageObservationSurvivesStorage() throws {
+        let values: [SeepageObservation] = [
+            .unfilled(.tightAndDry), .unfilled(.continuousFlow),
+            .filled(.fillingConsolidatedAndDry), .filled(.fillingWashedOutWithHeavyFlow)
+        ]
+        for value in values {
+            let data = try JSONEncoder().encode(value)
+            XCTAssertEqual(try JSONDecoder().decode(SeepageObservation.self, from: data), value)
+        }
     }
 
     func testTerminationCodes() {

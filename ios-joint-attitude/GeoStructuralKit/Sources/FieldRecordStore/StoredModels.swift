@@ -121,7 +121,7 @@ public final class StoredMeasurement {
         self.timestamp = record.timestamp
         self.dip = record.plane?.dip
         self.dipDirection = record.plane?.dipDirection
-        self.discontinuityTypeRaw = record.discontinuityType.rawValue
+        self.discontinuityTypeRaw = record.discontinuityType.storageKey
         self.modeRaw = record.mode.rawValue
         self.jointSetID = record.jointSetID
         self.observer = record.observer
@@ -134,14 +134,14 @@ public final class StoredMeasurement {
         self.timestamp = record.timestamp
         self.dip = record.plane?.dip
         self.dipDirection = record.plane?.dipDirection
-        self.discontinuityTypeRaw = record.discontinuityType.rawValue
+        self.discontinuityTypeRaw = record.discontinuityType.storageKey
         self.modeRaw = record.mode.rawValue
         self.jointSetID = record.jointSetID
         self.observer = record.observer
     }
 
     public var discontinuityType: DiscontinuityType? {
-        DiscontinuityType(rawValue: discontinuityTypeRaw)
+        DiscontinuityType(storageKey: discontinuityTypeRaw)
     }
 
     public var mode: MeasurementMode? {
