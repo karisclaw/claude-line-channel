@@ -165,59 +165,190 @@ final class MeasurementLocationTests: XCTestCase {
 
 final class SurveyGeometryTests: XCTestCase {
 
-    /// The one-dimensional geometries sample along their own direction.
-    func testScanlineAndBoreholeSampleAlongTheirOwnDirection() {
+    /// The error this API shape exists to prevent, asserted directly.
+    ///
+    /// For one outcrop face and one discontinuity, the plane formula and the line formula
+    /// do not merely differ — they invert. A set lying parallel to the face shows no
+    /// trace on it at all, so it needs the largest correction there is; feed the same
+    /// face's normal to the line formula and it comes back needing none. The earlier
+    /// version of this type handed out a bare `samplingDirection`, which invited exactly
+    /// that substitution.
+    func testThePlaneAndLineFormulasInvertEachOther() {
+        let face = PlaneOrientation(dip: 90, dipDirection: 90)
+        let parallelToFace = PlaneOrientation(dip: 90, dipDirection: 90)
+        let perpendicularToFace = PlaneOrientation(dip: 0, dipDirection: 0)
+
+        let correct = SamplingElement.plane(face)
+        let misused = SamplingElement.line(LineOrientation(measuredAxis: face.upwardNormal)!)
+
+        // Parallel to the face: invisible as a trace, but the line formula calls it perfect.
+        XCTAssertEqual(correct.samplingEfficiency(for: parallelToFace), 0, accuracy: 1e-9)
+        XCTAssertEqual(misused.samplingEfficiency(for: parallelToFace), 1, accuracy: 1e-9)
+
+        // Perpendicular to the face: the best-sampled case, and the line formula calls it
+        // invisible. The two are exactly the wrong way round.
+        XCTAssertEqual(correct.samplingEfficiency(for: perpendicularToFace), 1, accuracy: 1e-9)
+        XCTAssertEqual(misused.samplingEfficiency(for: perpendicularToFace), 0, accuracy: 1e-9)
+    }
+
+    /// A face shows the most traces of a set perpendicular to it, fewest of one parallel
+    /// to it, and the trace spacing in between goes as `1 / sin` of the dihedral angle.
+    func testWindowEfficiencyIsTheSineOfTheDihedralAngle() {
+        let face = PlaneOrientation(dip: 90, dipDirection: 0)
+        let element = SamplingElement.plane(face)
+        for dihedral in [0.0, 30, 45, 60, 90] {
+            // A set at `dihedral` to a vertical north-striking face.
+            let set = PlaneOrientation(dip: 90, dipDirection: dihedral)
+            XCTAssertEqual(
+                element.samplingEfficiency(for: set),
+                sin(GeoAngle.radians(fromDegrees: dihedral)),
+                accuracy: 1e-9,
+                "at a dihedral angle of \(dihedral)°"
+            )
+        }
+    }
+
+    /// Terzaghi's original relation: a borehole along the pole samples a set best, one
+    /// lying in the plane never samples it.
+    func testScanlineEfficiencyIsTheSineOfTheAngleToThePlane() {
+        let set = PlaneOrientation(dip: 30, dipDirection: 0)
+        let element = SamplingElement.line(LineOrientation(trend: 0, plunge: 0))
+        // A horizontal north-south scanline against a plane dipping 30° north: the angle
+        // between the pole and the scanline is 60°, so the efficiency is cos 60° = 0.5.
+        XCTAssertEqual(element.samplingEfficiency(for: set), 0.5, accuracy: 1e-9)
+
+        // Along the pole: perfect sampling.
+        let alongPole = SamplingElement.line(LineOrientation(measuredAxis: set.upwardNormal)!)
+        XCTAssertEqual(alongPole.samplingEfficiency(for: set), 1, accuracy: 1e-9)
+
+        // In the plane: none at all.
+        let inPlane = SamplingElement.line(set.strikeLine)
+        XCTAssertEqual(inPlane.samplingEfficiency(for: set), 0, accuracy: 1e-9)
+    }
+
+    func testScanlineAndBoreholeShareTheirGeometry() {
         let line = LineOrientation(trend: 45, plunge: 10)
         for geometry in [
             SurveyGeometry.scanline(line: line, lengthMetres: 20),
             SurveyGeometry.borehole(axis: line, lengthMetres: 20)
         ] {
             XCTAssertEqual(geometry.biasCorrectionMethod, .terzaghi)
-            XCTAssertEqual(geometry.samplingDirection, line.downPlungeVector)
+            XCTAssertEqual(geometry.samplingElement, .line(line))
             XCTAssertEqual(geometry.sampledLengthMetres, 20)
             XCTAssertNil(geometry.sampledAreaSquareMetres)
             XCTAssertNil(geometry.surfaceFacets)
         }
     }
 
-    /// The two-dimensional geometries sample along their face normal. A photogrammetric
-    /// trace map on a planar face is corrected exactly like a hand-mapped window; the
-    /// cases differ only in what the record says about how the traces were obtained.
-    func testWindowAndTraceMapSampleAlongTheirFaceNormal() {
+    /// A photogrammetric trace map on a planar face is corrected exactly like a
+    /// hand-mapped window; the cases differ only in what the record says about how the
+    /// traces were obtained.
+    func testWindowAndTraceMapShareTheirGeometry() {
         let face = PlaneOrientation(dip: 80, dipDirection: 200)
         for geometry in [
             SurveyGeometry.window(face: face, areaSquareMetres: 30),
             SurveyGeometry.traceMap(face: face, areaSquareMetres: 30)
         ] {
             XCTAssertEqual(geometry.biasCorrectionMethod, .terzaghi)
-            XCTAssertEqual(geometry.samplingDirection, face.upwardNormal)
+            XCTAssertEqual(geometry.samplingElement, .plane(face))
             XCTAssertEqual(geometry.sampledAreaSquareMetres, 30)
             XCTAssertNil(geometry.sampledLengthMetres)
         }
     }
 
-    /// A surface model has no single sampling direction, so the classical Terzaghi
-    /// weight does not apply. It asks for the area-weighted method instead and carries
-    /// the facets that method needs — rather than returning a Terzaghi direction that
-    /// would produce a confident, wrong weight.
+    /// The property that makes the area-weighted method the right recommendation: it is
+    /// not a different theory, it is the planar formula summed. With one facet the two
+    /// must agree exactly.
+    func testOneFacetSurfaceModelMatchesTheWindowExactly() {
+        let face = PlaneOrientation(dip: 85, dipDirection: 120)
+        let window = SurveyGeometry.window(face: face, areaSquareMetres: 17)
+        let model = SurveyGeometry.surfaceModel(
+            facets: [SurfaceFacet(orientation: face, areaSquareMetres: 17)]
+        )
+        for dip in stride(from: 0.0, through: 90.0, by: 5.0) {
+            for dipDirection in stride(from: 0.0, to: 360.0, by: 30.0) {
+                let discontinuity = PlaneOrientation(dip: dip, dipDirection: dipDirection)
+                XCTAssertEqual(
+                    model.samplingEfficiency(for: discontinuity)!,
+                    window.samplingEfficiency(for: discontinuity)!,
+                    accuracy: 1e-12,
+                    "at \(discontinuity)"
+                )
+            }
+        }
+        // The facet's area cancels, so it is the orientations that matter, not the scale.
+        let bigger = SurveyGeometry.surfaceModel(
+            facets: [SurfaceFacet(orientation: face, areaSquareMetres: 1700)]
+        )
+        let probe = PlaneOrientation(dip: 40, dipDirection: 10)
+        XCTAssertEqual(
+            bigger.samplingEfficiency(for: probe)!,
+            model.samplingEfficiency(for: probe)!,
+            accuracy: 1e-12
+        )
+    }
+
+    /// An exposure facing one way is nearly blind to the joints parallel to it, and an
+    /// exposure facing several ways is not. This is the number a cap would hide, which is
+    /// why the efficiency is reported rather than only its reciprocal.
+    func testSurfaceModelShowsTheBlindZoneOfASingleOrientationExposure() {
+        let face = PlaneOrientation(dip: 85, dipDirection: 120)
+        let single = SurveyGeometry.surfaceModel(
+            facets: [SurfaceFacet(orientation: face, areaSquareMetres: 100)]
+        )
+        let mixed = SurveyGeometry.surfaceModel(facets: [
+            SurfaceFacet(orientation: face, areaSquareMetres: 60),
+            SurfaceFacet(orientation: PlaneOrientation(dip: 20, dipDirection: 300), areaSquareMetres: 25),
+            SurfaceFacet(orientation: PlaneOrientation(dip: 70, dipDirection: 10), areaSquareMetres: 15)
+        ])
+
+        // A set parallel to the single face is invisible to it.
+        XCTAssertEqual(single.samplingEfficiency(for: face)!, 0, accuracy: 1e-9)
+        // The same set is perfectly visible on an exposure that also faces other ways.
+        XCTAssertGreaterThan(mixed.samplingEfficiency(for: face)!, 0.3)
+
+        // Everything stays a proper fraction.
+        for dip in stride(from: 0.0, through: 90.0, by: 10.0) {
+            for dipDirection in stride(from: 0.0, to: 360.0, by: 45.0) {
+                let discontinuity = PlaneOrientation(dip: dip, dipDirection: dipDirection)
+                for geometry in [single, mixed] {
+                    let efficiency = geometry.samplingEfficiency(for: discontinuity)!
+                    XCTAssertGreaterThanOrEqual(efficiency, 0)
+                    XCTAssertLessThanOrEqual(efficiency, 1)
+                }
+            }
+        }
+    }
+
     func testSurfaceModelAsksForTheAreaWeightedMethod() {
-        let facets = [
+        let geometry = SurveyGeometry.surfaceModel(facets: [
             SurfaceFacet(orientation: PlaneOrientation(dip: 80, dipDirection: 10), areaSquareMetres: 12),
             SurfaceFacet(orientation: PlaneOrientation(dip: 20, dipDirection: 200), areaSquareMetres: 8)
-        ]
-        let geometry = SurveyGeometry.surfaceModel(facets: facets)
+        ])
         XCTAssertEqual(geometry.biasCorrectionMethod, .areaWeightedSurface)
-        XCTAssertNil(geometry.samplingDirection, "there is no one direction to correct against")
+        XCTAssertNil(geometry.samplingElement, "there is no one element to correct against")
         XCTAssertEqual(geometry.surfaceFacets?.count, 2)
         XCTAssertEqual(geometry.sampledAreaSquareMetres, 20)
+    }
+
+    func testSurfaceModelWithNoUsableAreaHasNoEfficiency() {
+        let probe = PlaneOrientation(dip: 45, dipDirection: 90)
+        XCTAssertNil(SurveyGeometry.surfaceModel(facets: []).samplingEfficiency(for: probe))
+        XCTAssertNil(
+            SurveyGeometry.surfaceModel(facets: [
+                SurfaceFacet(orientation: probe, areaSquareMetres: 0)
+            ]).samplingEfficiency(for: probe)
+        )
     }
 
     /// Selective sampling cannot be bias-corrected: the bias is in the geologist's
     /// choice, and no geometry describes it. Saying so is better than offering a weight
     /// that looks like a correction.
     func testSelectiveSamplingCannotBeCorrected() {
+        let probe = PlaneOrientation(dip: 45, dipDirection: 90)
         XCTAssertEqual(SurveyGeometry.selective.biasCorrectionMethod, .unavailable)
-        XCTAssertNil(SurveyGeometry.selective.samplingDirection)
+        XCTAssertNil(SurveyGeometry.selective.samplingElement)
+        XCTAssertNil(SurveyGeometry.selective.samplingEfficiency(for: probe))
         XCTAssertNil(SurveyGeometry.selective.sampledLengthMetres)
         XCTAssertNil(SurveyGeometry.selective.sampledAreaSquareMetres)
     }
@@ -240,12 +371,25 @@ final class SurveyGeometryTests: XCTestCase {
     }
 
     /// A vertical borehole is nearly blind to horizontal joints, which is the strongest
-    /// sampling bias in the project and the reason provenance is kept.
-    func testVerticalBoreholeSamplesAlongVertical() {
+    /// sampling bias in the project and the reason the provenance is kept.
+    func testVerticalBoreholeIsNearlyBlindToHorizontalJoints() {
         let geometry = SurveyGeometry.borehole(
             axis: LineOrientation(trend: 0, plunge: 90), lengthMetres: 40
         )
-        XCTAssertEqual(geometry.samplingDirection!.up, -1, accuracy: 1e-9)
+        // A horizontal set: the hole runs along its pole, so it is sampled perfectly.
+        XCTAssertEqual(
+            geometry.samplingEfficiency(for: PlaneOrientation(dip: 0, dipDirection: 0))!,
+            1, accuracy: 1e-9
+        )
+        // A vertical set: the hole lies in it and never crosses it.
+        XCTAssertEqual(
+            geometry.samplingEfficiency(for: PlaneOrientation(dip: 90, dipDirection: 90))!,
+            0, accuracy: 1e-9
+        )
+        // A set at 80°, the awkward case a cap exists for: an uncapped weight of 5.8.
+        let steep = geometry.samplingEfficiency(for: PlaneOrientation(dip: 80, dipDirection: 90))!
+        XCTAssertEqual(steep, 0.1736, accuracy: 1e-4)
+        XCTAssertEqual(1 / steep, 5.76, accuracy: 0.01)
     }
 }
 

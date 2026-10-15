@@ -43,8 +43,9 @@ ios-joint-attitude/
   **含水（無充填／有充填兩張表，各 I–V，不可混淆）**、延續性、間距、端點；
   **每個級距界線都寫成數值範圍並有測試釘住**
 - `DiscontinuityType` — 15 種標準類型 + `other(String)`；帶狀類型另有厚度欄位
-- `SurveyGeometry` — 測線／鑽孔／測窗／trace map／3D 表面模型／選擇性，
-  各自標示適用的偏壓修正方法
+- `SurveyGeometry` / `SamplingElement` — 測線／鑽孔／測窗／trace map／3D 表面模型／選擇性；
+  一個 `samplingEfficiency(for:)` 統管三種幾何（線用 `|pole·s|`、面用 `|pole×m|`、
+  3D 用面積加權），權重上限與盲區政策留給 C
 - `ApertureObservation` 等 — 區分「量測值」與「目測分級」，不壓平成同一個欄位
 - `SurveyGeometry` — scanline / window / selective，供 Terzaghi 修正
 - `CarryForwardPolicy` — 複製上一筆設定，並明確規定六件永不繼承的東西
@@ -138,7 +139,10 @@ python3 tools/reference_check.py
 | `testSeepageObservationCarriesWhichScaleWasUsed` | 兩張含水表共用評等號，存下來的值自己說明來自哪張 |
 | `testSeepageScaleIsCheckedAgainstTheRecordedFilling` | 用錯表會被回報 |
 | `testTheOverlappingPublishedApertureClassIsStorableButNeverDerived` | 原表重疊的 `wide` 可存不可導出 |
-| `testSurfaceModelAsksForTheAreaWeightedMethod` | 3D 表面模型不回傳 Terzaghi 方向 |
+| `testThePlaneAndLineFormulasInvertEachOther` | 面／線公式互為顛倒 —— B1 第一版的真實錯誤 |
+| `testWindowEfficiencyIsTheSineOfTheDihedralAngle` | 測窗效率 = sin(兩面夾角)，以 trace 間距獨立驗證 |
+| `testOneFacetSurfaceModelMatchesTheWindowExactly` | 面積加權法單 facet 時與測窗公式完全相同（1.1e-16）|
+| `testSurfaceModelShowsTheBlindZoneOfASingleOrientationExposure` | 單一朝向露頭對平行節理組全盲 |
 | `testSignFlippedSamplesGiveTheSameMean` | 軸性平均：符號相反的樣本不會相消（對照組算術平均只剩 0.021） |
 | `testGirdleFabricEigenvalues` | 環帶型 fabric 的特徵值退化情況 |
 | `testARKitMappingPreservesHandedness` | ARKit 轉換行列式為 +1，不鏡射 |

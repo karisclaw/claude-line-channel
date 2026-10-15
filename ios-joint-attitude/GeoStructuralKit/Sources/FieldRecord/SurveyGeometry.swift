@@ -14,6 +14,46 @@ public struct SurfaceFacet: Equatable, Sendable, Codable {
     }
 }
 
+/// The geometric element that does the sampling.
+///
+/// A line and a plane bias the data **in opposite directions**, and keeping them as
+/// distinct cases is what stops one being given the other's formula. A joint running
+/// parallel to the outcrop face is the easiest thing in the world for a scanline lying in
+/// that face to cross, and the hardest thing for the face itself to show as a trace. Hand
+/// a face normal to the scanline formula and that joint comes out needing no correction
+/// at all, when in truth it is almost invisible.
+public enum SamplingElement: Equatable, Sendable, Codable {
+
+    /// A line — a scanline laid across the outcrop, or a borehole axis.
+    case line(LineOrientation)
+
+    /// A plane — a mapped face, or one facet of a surface model.
+    case plane(PlaneOrientation)
+
+    /// Sine of the angle between `discontinuity` and this element, `0...1`.
+    ///
+    /// This single quantity is what sampling bias runs on: the apparent frequency of a
+    /// set is proportional to it, so the bias weight is its reciprocal. It is written
+    /// once, here, because the two cases reduce to different expressions of the same
+    /// geometry:
+    ///
+    /// - against a **line** `s`, the angle between a plane and a line gives
+    ///   `|pole · s|` — this is Terzaghi's original relation, where a borehole along the
+    ///   pole samples best and one lying in the plane never samples at all;
+    /// - against a **plane** with normal `m`, the angle between two planes gives
+    ///   `|pole × m|` — a face shows the most traces of a set perpendicular to it and
+    ///   none at all of a set parallel to it.
+    public func samplingEfficiency(for discontinuity: PlaneOrientation) -> Double {
+        let pole = discontinuity.upwardNormal
+        switch self {
+        case .line(let line):
+            return GeoAngle.clamp(abs(pole.dot(line.downPlungeVector)), 0, 1)
+        case .plane(let face):
+            return GeoAngle.clamp(pole.cross(face.upwardNormal).length, 0, 1)
+        }
+    }
+}
+
 /// How sampling bias can be corrected for a given survey geometry.
 public enum BiasCorrectionMethod: String, Sendable, Codable {
 
@@ -21,16 +61,12 @@ public enum BiasCorrectionMethod: String, Sendable, Codable {
     /// pole and that direction, capped.
     case terzaghi
 
-    /// Area-weighted over a set of exposed facets, for a surface with many
-    /// orientations.
+    /// Area-weighted over the exposed facets, for a surface facing many directions.
     ///
-    /// A single Terzaghi weight does not apply: there is no one sampling direction, and
-    /// the correction has to work from the area-weighted probability that a
-    /// discontinuity of a given attitude intersects the exposure at all. **Which
-    /// formulation to use is a decision for the set-analysis module**, not something to
-    /// settle here — so the geometry says that this is the method required, and asking
-    /// for the weight before it exists fails loudly rather than returning a Terzaghi
-    /// number that would be wrong.
+    /// Not a different theory — the same relation as ``terzaghi``, summed. Each facet is
+    /// a tiny mapped face, so the share of the exposure that can see a given attitude is
+    /// the area-weighted mean of the per-facet sines. It reduces exactly to the planar
+    /// case when there is one facet, which is the property worth testing.
     case areaWeightedSurface
 
     /// No correction is possible.
@@ -91,15 +127,14 @@ public enum SurveyGeometry: Equatable, Sendable, Codable {
         }
     }
 
-    /// The single sampling direction the Terzaghi correction works against: the
-    /// scanline's or borehole's own direction, or the normal of the mapped face.
+    /// The element that does the sampling, for the geometries that have just one.
     ///
-    /// `nil` where no single direction exists — a surface model — or where no correction
-    /// is possible at all.
-    public var samplingDirection: Vector3? {
+    /// `nil` for a surface model, which has many, and for selective sampling, which has
+    /// none that describes its bias.
+    public var samplingElement: SamplingElement? {
         switch self {
-        case .scanline(let line, _), .borehole(let line, _): line.downPlungeVector
-        case .window(let face, _), .traceMap(let face, _): face.upwardNormal
+        case .scanline(let line, _), .borehole(let line, _): .line(line)
+        case .window(let face, _), .traceMap(let face, _): .plane(face)
         case .surfaceModel, .selective: nil
         }
     }
@@ -110,6 +145,37 @@ public enum SurveyGeometry: Equatable, Sendable, Codable {
         case .surfaceModel(let facets): facets
         default: nil
         }
+    }
+
+    /// The share of this exposure that can see a discontinuity of the given attitude,
+    /// `0...1`.
+    ///
+    /// The apparent frequency of a set is proportional to this, so the bias weight is
+    /// its reciprocal. One function covers all three correctable geometries: a line, a
+    /// plane, and an area-weighted mean over many planes.
+    ///
+    /// What is deliberately **not** here is the weight itself. Taking the reciprocal
+    /// needs a cap — the project specification suggests 5 to 10 — and a cap silently
+    /// under-reports any set whose efficiency falls below its reciprocal. Deciding the
+    /// cap, and deciding when an efficiency is so low that the set should be reported as
+    /// unsampled rather than corrected, is a statistical judgement that belongs with the
+    /// set analysis. This returns the raw geometry so that judgement has something
+    /// honest to work from.
+    ///
+    /// `nil` for selective sampling, and for a surface model with no usable facet area.
+    public func samplingEfficiency(for discontinuity: PlaneOrientation) -> Double? {
+        if let element = samplingElement {
+            return element.samplingEfficiency(for: discontinuity)
+        }
+        guard case .surfaceModel(let facets) = self else { return nil }
+        let totalArea = facets.reduce(0.0) { $0 + max($1.areaSquareMetres, 0) }
+        guard totalArea > 0 else { return nil }
+        let weighted = facets.reduce(0.0) { sum, facet in
+            let area = max(facet.areaSquareMetres, 0)
+            return sum + area * SamplingElement.plane(facet.orientation)
+                .samplingEfficiency(for: discontinuity)
+        }
+        return GeoAngle.clamp(weighted / totalArea, 0, 1)
     }
 
     /// Length sampled, in metres, for the one-dimensional geometries.

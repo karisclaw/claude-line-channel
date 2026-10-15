@@ -553,6 +553,47 @@ def print_isrm_tables():
         print(f"    {rating}  {name}")
 
 
+# ---- B: sampling bias (mirrors SamplingElement / SurveyGeometry) ----
+#
+# One relation covers every correctable geometry: the apparent frequency of a set is
+# proportional to the SINE of the angle between the discontinuity and the sampling
+# element, so the bias weight is its reciprocal.
+#
+#   against a LINE  s (scanline, borehole):  sine = |pole . s|      <- Terzaghi's original
+#   against a PLANE m (window, trace map):   sine = |pole x m|
+#
+# The two depend on the pole in OPPOSITE directions. A set lying parallel to the outcrop
+# face shows no trace on it, needing the largest correction there is, while a scanline
+# along that face's normal samples it perfectly. Feeding a face normal to the line
+# formula therefore inverts the correction.
+
+
+def line_sampling_efficiency(pole, direction):
+    return min(1.0, abs(dot(norm(pole), norm(direction))))
+
+
+def plane_sampling_efficiency(pole, face_normal):
+    c = cross(norm(pole), norm(face_normal))
+    return min(1.0, math.sqrt(dot(c, c)))
+
+
+def surface_model_efficiency(pole, facets):
+    """Area-weighted mean of the per-facet planar efficiencies.
+
+    Not a different theory from the planar case -- the same relation, summed. Each facet
+    is a tiny mapped face, so this reduces exactly to `plane_sampling_efficiency` for a
+    single facet, which is the property worth testing.
+    """
+    total = sum(max(area, 0.0) for _, area in facets)
+    if total <= 0:
+        return None
+    weighted = sum(
+        max(area, 0.0) * plane_sampling_efficiency(pole, normal)
+        for normal, area in facets
+    )
+    return min(1.0, weighted / total)
+
+
 def octant(vector):
     return (1 if vector[0] >= 0 else 0) | (2 if vector[1] >= 0 else 0) | (4 if vector[2] >= 0 else 0)
 
@@ -1028,6 +1069,96 @@ def main():
     area_weighted = {n for n, m in SURVEY_GEOMETRIES.items() if m == "areaWeightedSurface"}
     if area_weighted != {"surfaceModel"}:
         FAILURES.append(f"area-weighted correction claimed by {area_weighted}")
+
+    # 27. Sampling bias. Terzaghi's original relation against a line.
+    set_pole = normal_from_plane(30, 0)
+    check("scanline along the pole", line_sampling_efficiency(set_pole, set_pole), 1.0)
+    check("scanline in the plane",
+          line_sampling_efficiency(set_pole, axis_from_line(270, 0)), 0.0)
+    check("scanline at 60 deg to the pole",
+          line_sampling_efficiency(set_pole, axis_from_line(0, 0)), 0.5)
+
+    # Against a plane, the efficiency is the sine of the dihedral angle. Verified against
+    # the trace spacing it comes from: parallel planes spaced S cut a face in lines
+    # spaced S / sin(dihedral) apart, measured within that face.
+    face_normal = normal_from_plane(90, 0)
+    # Named `dihedral_angle`, not `dihedral`: a local of that name would shadow the
+    # module-level dihedral() for the whole of main(), and Python then refuses the
+    # earlier calls to it.
+    for dihedral_angle in (0.0, 30.0, 45.0, 60.0, 90.0):
+        pole = normal_from_plane(90, dihedral_angle)
+        check(f"window efficiency at {dihedral_angle:g} deg",
+              plane_sampling_efficiency(pole, face_normal), math.sin(R(dihedral_angle)))
+
+    spacing = 0.5
+    for (dip, dipdir), (face_dip, face_dipdir) in (
+        ((60, 90), (90, 0)), ((30, 0), (85, 120)), ((45, 45), (90, 45)), ((20, 310), (70, 15))
+    ):
+        pole = norm(normal_from_plane(dip, dipdir))
+        face = norm(normal_from_plane(face_dip, face_dipdir))
+        trace = cross(pole, face)
+        if math.sqrt(dot(trace, trace)) < 1e-12:
+            continue
+        trace = norm(trace)
+        across = cross(face, trace)                 # in the face, across the traces
+        measured = abs(spacing / dot(pole, across))  # in-face spacing of adjacent traces
+        predicted = spacing / plane_sampling_efficiency(pole, face)
+        check(f"trace spacing {dip}/{dipdir} on {face_dip}/{face_dipdir}", measured, predicted)
+
+    # The inversion the typed sampling element exists to prevent.
+    outcrop = normal_from_plane(90, 90)
+    parallel_set = normal_from_plane(90, 90)
+    perpendicular_set = normal_from_plane(0, 0)
+    check("parallel set, plane formula", plane_sampling_efficiency(parallel_set, outcrop), 0.0)
+    check("parallel set, line formula misused",
+          line_sampling_efficiency(parallel_set, outcrop), 1.0)
+    check("perpendicular set, plane formula",
+          plane_sampling_efficiency(perpendicular_set, outcrop), 1.0)
+    check("perpendicular set, line formula misused",
+          line_sampling_efficiency(perpendicular_set, outcrop), 0.0)
+
+    # 28. The area-weighted surface method reduces exactly to the planar one.
+    face = normal_from_plane(85, 120)
+    worst = 0.0
+    for dip in range(0, 91, 5):
+        for dipdir in range(0, 360, 15):
+            pole = normal_from_plane(dip, dipdir)
+            one_facet = surface_model_efficiency(pole, [(face, 17.0)])
+            worst = max(worst, abs(one_facet - plane_sampling_efficiency(pole, face)))
+    check("one-facet surface model equals the window", worst, 0.0, 1e-12)
+    print(f"area-weighted surface vs window, one facet: worst difference {worst:.2e}")
+
+    if surface_model_efficiency(normal_from_plane(45, 90), []) is not None:
+        FAILURES.append("an empty surface model should have no efficiency")
+    if surface_model_efficiency(normal_from_plane(45, 90), [(face, 0.0)]) is not None:
+        FAILURES.append("a zero-area surface model should have no efficiency")
+
+    # Area cancels: it is the orientations that matter, not the scale of the model.
+    probe = normal_from_plane(40, 10)
+    check("facet area cancels",
+          surface_model_efficiency(probe, [(face, 1700.0)]),
+          surface_model_efficiency(probe, [(face, 17.0)]), 1e-12)
+
+    # 29. Blind zones. An exposure facing one way cannot see the joints parallel to it,
+    #     and a cap would turn that zero into a finite weight and under-report the set.
+    single = [(normal_from_plane(85, 120), 100.0)]
+    mixed = [(normal_from_plane(85, 120), 60.0),
+             (normal_from_plane(20, 300), 25.0),
+             (normal_from_plane(70, 10), 15.0)]
+    blind = surface_model_efficiency(normal_from_plane(85, 120), single)
+    seen = surface_model_efficiency(normal_from_plane(85, 120), mixed)
+    check("single-orientation exposure is blind to a parallel set", blind, 0.0, 1e-12)
+    if not seen > 0.3:
+        FAILURES.append(f"a multi-orientation exposure should see that set, got {seen}")
+    print(f"blind zone: a set parallel to a one-orientation exposure scores {blind:.4f}, "
+          f"and {seen:.4f} on a three-orientation one")
+
+    for facets in (single, mixed):
+        for dip in range(0, 91, 10):
+            for dipdir in range(0, 360, 45):
+                value = surface_model_efficiency(normal_from_plane(dip, dipdir), facets)
+                if not 0.0 <= value <= 1.0:
+                    FAILURES.append(f"efficiency {value} out of range")
 
     print("ISRM class boundaries, for checking against the standard:")
     print_isrm_tables()
