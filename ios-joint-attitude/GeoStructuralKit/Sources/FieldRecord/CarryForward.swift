@@ -61,6 +61,13 @@ public struct CarryForwardPolicy: Equatable, Sendable, Codable {
 
 extension MeasurementRecord {
 
+    /// The type a record starts as when the previous one's type is not carried forward.
+    ///
+    /// Named rather than written inline in two places: the recorder has to predict what
+    /// a new record will inherit in order to check it, and a second literal `.joint`
+    /// would be a second thing to keep in step.
+    public static let defaultDiscontinuityType: DiscontinuityType = .joint
+
     /// A blank record that inherits the settings of `previous` according to `policy`.
     ///
     /// Six things are never inherited, whatever the policy:
@@ -87,7 +94,9 @@ extension MeasurementRecord {
             conventionVersion: AttitudeConvention.version,
             geometry: policy.deviceGeometry ? previous.geometry : .default,
             surveyGeometry: policy.surveyGeometry ? previous.surveyGeometry : nil,
-            discontinuityType: policy.discontinuityType ? previous.discontinuityType : .joint,
+            discontinuityType: policy.discontinuityType
+                ? previous.discontinuityType
+                : MeasurementRecord.defaultDiscontinuityType,
             isrm: policy.isrm ? previous.isrm : .empty,
             observer: policy.observer ? previous.observer : nil
         )

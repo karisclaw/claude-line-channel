@@ -16,7 +16,9 @@ let package = Package(
     products: [
         .library(name: "OrientationCore", targets: ["OrientationCore"]),
         .library(name: "FieldRecord", targets: ["FieldRecord"]),
-        .library(name: "FieldRecordStore", targets: ["FieldRecordStore"])
+        .library(name: "FieldRecordStore", targets: ["FieldRecordStore"]),
+        .library(name: "FieldSession", targets: ["FieldSession"]),
+        .library(name: "FieldUI", targets: ["FieldUI"])
     ],
     targets: [
         // A1 + A2: attitude conversion, sampling, quality. Foundation only.
@@ -49,6 +51,29 @@ let package = Package(
         .target(
             name: "FieldRecordStore",
             dependencies: ["FieldRecord"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        // B2: the recording flow — what a trigger means in each state, what may be
+        // confirmed without looking, how a finished burst becomes a record. All of it
+        // Foundation-only and driven by injected events, because the screen it belongs
+        // to cannot be tested here at all.
+        .target(
+            name: "FieldSession",
+            dependencies: ["FieldRecord", "OrientationCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "FieldSessionTests",
+            dependencies: ["FieldSession", "FieldRecord", "OrientationCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        // B2: the screens. Behind `#if canImport(SwiftUI)`, and deliberately thin —
+        // every decision it could get wrong lives in FieldSession instead.
+        .target(
+            name: "FieldUI",
+            dependencies: ["FieldSession", "FieldRecord", "OrientationCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]

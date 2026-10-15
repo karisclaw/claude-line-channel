@@ -594,6 +594,44 @@ def surface_model_efficiency(pole, facets):
     return min(1.0, weighted / total)
 
 
+# ---- B2: what a press means in each state (mirrors MeasurementRecorder) ----
+#
+# One button, which may be a Bluetooth key the geologist cannot see, so the same press
+# has to mean the obviously right thing everywhere. The second row is the important one:
+# a press while measuring CANCELS. Starting a second burst would discard the first
+# silently, and a cancellation is recoverable where a lost measurement is not.
+PRESS_MEANING = {
+    "idle": "started",
+    "saved": "started",
+    "settling": "cancelled",
+    "collecting": "cancelled",
+    "review-clean": "saved",
+    "review-flagged": "refusedBlindConfirmation",
+}
+
+# A warning withdraws the blind path and nothing else: an on-screen confirmation always
+# saves. The geologist is at the outcrop and the app is not.
+ON_SCREEN_CONFIRM_ALWAYS_SAVES = True
+
+# Which warnings withdraw the blind path under the standard policy.
+WARNINGS_REQUIRING_A_LOOK = {
+    "magneticDisturbance": True,
+    "placementDisagreement": True,
+    "excessiveScatter": True,
+    "sampleRateShortfall": False,   # a short stream still averages correctly
+    "positionUnavailable": False,   # there may never be a fix in a gorge
+    "descriptionInconsistency": True,
+}
+
+REPEAT_PRESS_INTERVAL = 0.35        # seconds
+
+
+def press_outcome(state, elapsed_since_last_press=None):
+    if elapsed_since_last_press is not None and elapsed_since_last_press < REPEAT_PRESS_INTERVAL:
+        return "ignoredRepeatPress"
+    return PRESS_MEANING[state]
+
+
 def octant(vector):
     return (1 if vector[0] >= 0 else 0) | (2 if vector[1] >= 0 else 0) | (4 if vector[2] >= 0 else 0)
 
@@ -1159,6 +1197,41 @@ def main():
                 value = surface_model_efficiency(normal_from_plane(dip, dipdir), facets)
                 if not 0.0 <= value <= 1.0:
                     FAILURES.append(f"efficiency {value} out of range")
+
+    # 30. The press table, and the rules that make one blind button safe.
+    for state, expected in PRESS_MEANING.items():
+        got = press_outcome(state)
+        if got != expected:
+            FAILURES.append(f"a press in {state} should {expected}, got {got}")
+    if PRESS_MEANING["settling"] != "cancelled" or PRESS_MEANING["collecting"] != "cancelled":
+        FAILURES.append("a press while measuring must cancel, never start a second burst")
+    if PRESS_MEANING["review-flagged"] == "saved":
+        FAILURES.append("a flagged measurement must not accept a blind press")
+    if PRESS_MEANING["review-clean"] != "saved":
+        FAILURES.append("a clean measurement must accept a press, or the key is useless")
+    if not ON_SCREEN_CONFIRM_ALWAYS_SAVES:
+        FAILURES.append("an on-screen confirmation must always be allowed to save")
+
+    # Key repeat and a cold-thumb double tap are swallowed; the deliberate accepting
+    # press, which comes after a burst of well over a second, is not.
+    for elapsed in (0.0, 0.05, 0.2, 0.34):
+        if press_outcome("settling", elapsed) != "ignoredRepeatPress":
+            FAILURES.append(f"a press {elapsed}s after the last should be ignored")
+    for elapsed in (0.36, 1.5, 2.0):
+        if press_outcome("settling", elapsed) == "ignoredRepeatPress":
+            FAILURES.append(f"a press {elapsed}s after the last is deliberate")
+    if REPEAT_PRESS_INTERVAL >= 1.0:
+        FAILURES.append("the repeat interval must stay well under a burst's duration")
+
+    looks = sum(1 for required in WARNINGS_REQUIRING_A_LOOK.values() if required)
+    check("warnings that withdraw the blind path", float(looks), 4.0, 0.0)
+    for name in ("sampleRateShortfall", "positionUnavailable"):
+        if WARNINGS_REQUIRING_A_LOOK[name]:
+            FAILURES.append(f"{name} should not stop the geologist")
+
+    print("a press means:")
+    for state, outcome in PRESS_MEANING.items():
+        print(f"  {state:16s} -> {outcome}")
 
     print("ISRM class boundaries, for checking against the standard:")
     print_isrm_tables()

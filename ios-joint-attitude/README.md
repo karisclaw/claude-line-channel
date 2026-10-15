@@ -12,11 +12,11 @@
 | **A2** | 取樣、靜止偵測、磁干擾品管、校正流程 | ✅ 完成，待檢視 |
 | A3 | LiDAR 非接觸式量測（ARKit + RANSAC） | 尚未開始 |
 | **B1** | 資料模型（值型別 + SwiftData） | ✅ 完成，待檢視 |
-| B2 | 野外紀錄 UI（單手、手套模式、藍牙音量鍵） | 尚未開始 |
+| **B2** | 野外紀錄流程（單手、手套模式、外接鍵） | ✅ 完成，待檢視 |
 | C | 群集分析（投影、分組、統計、圖形） | 尚未開始 |
 | D | 匯出（CSV/GeoJSON/KML/PDF/zip） | 尚未開始 |
 
-分階段交付，每階段結束停下來檢視。**目前停在 B1 結束**。
+分階段交付，每階段結束停下來檢視。**目前停在 B2 結束**。
 A1 的六個地質慣例問題已確認，決策紀錄在 `docs/conventions.md`。
 
 ## 結構
@@ -27,6 +27,8 @@ ios-joint-attitude/
 │   ├── Sources/OrientationCore/     A1+A2 位態與取樣，Foundation only
 │   ├── Sources/FieldRecord/         B 的值型別，Foundation only
 │   ├── Sources/FieldRecordStore/    SwiftData @Model，整檔 #if canImport(SwiftData)
+│   ├── Sources/FieldSession/        B2 紀錄流程狀態機，Foundation only
+│   ├── Sources/FieldUI/             SwiftUI 畫面，整檔 #if canImport(SwiftUI)
 │   └── Tests/
 ├── docs/conventions.md        地質與座標慣例決策紀錄（含對原規格的一處修正）
 └── tools/reference_check.py   獨立的 Python 參考實作，交叉驗證 Swift 的數學
@@ -35,6 +37,16 @@ ios-joint-attitude/
 `GeoStructuralKit` 不 import UIKit、SwiftUI、CoreMotion、CoreLocation 或 ARKit，
 只吃四元數、向量與角度這些純數字。App 層負責跟感測器打交道，
 把結果餵進來。因此整包可以在任何平台（含 Linux CI）跑測試。
+
+## B2 已實作
+
+- `MeasurementRecorder` — 一顆按鍵的狀態機：閒置→靜止→取樣→複查→儲存；
+  **取樣中按第二下是取消，不是重新開始**
+- `ReviewPolicy` — 旗標只收回「不看螢幕就確認」這條路，**永不阻止儲存**
+- `MeasurementWarning` — 磁干擾／貼合面不一致／分散過大／取樣率不足／無定位／描述矛盾
+- `MeasurementContext` — 位置與磁環境，在**叢集結束時**快照而非確認時
+- `ControlSizing` — 手套模式的尺寸與單手拇指可及範圍
+- `FieldUI` — 薄 SwiftUI 層 + 外接鍵接線（**未執行過**）
 
 ## B1 已實作
 
@@ -143,6 +155,11 @@ python3 tools/reference_check.py
 | `testWindowEfficiencyIsTheSineOfTheDihedralAngle` | 測窗效率 = sin(兩面夾角)，以 trace 間距獨立驗證 |
 | `testOneFacetSurfaceModelMatchesTheWindowExactly` | 面積加權法單 facet 時與測窗公式完全相同（1.1e-16）|
 | `testSurfaceModelShowsTheBlindZoneOfASingleOrientationExposure` | 單一朝向露頭對平行節理組全盲 |
+| `testSecondPressWhileMeasuringCancelsRatherThanRestarting` | 取樣中第二次按壓是取消 —— 取消可復原，遺失量測不行 |
+| `testAFlaggedMeasurementRefusesABlindPressButStillSaves` | 旗標收回盲操作，但螢幕上確認永遠能存 |
+| `testTheContextIsSnapshottedWhenTheBurstFinishesNotAtConfirmation` | 走開才確認時，定位仍屬於原本那條節理 |
+| `testAutoConfirmStillStopsForAFlaggedMeasurement` | 自動確認仍會為旗標停下 |
+| `testRepeatPressesWithinTheIntervalAreIgnored` | 鍵盤連發與冷手雙擊不會取消剛開始的量測 |
 | `testSignFlippedSamplesGiveTheSameMean` | 軸性平均：符號相反的樣本不會相消（對照組算術平均只剩 0.021） |
 | `testGirdleFabricEigenvalues` | 環帶型 fabric 的特徵值退化情況 |
 | `testARKitMappingPreservesHandedness` | ARKit 轉換行列式為 +1，不鏡射 |
