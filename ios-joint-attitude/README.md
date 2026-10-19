@@ -13,10 +13,13 @@
 | A3 | LiDAR 非接觸式量測（ARKit + RANSAC） | 尚未開始 |
 | **B1** | 資料模型（值型別 + SwiftData） | ✅ 完成，待檢視 |
 | **B2** | 野外紀錄流程（單手、手套模式、外接鍵） | ✅ 完成，待檢視 |
-| C | 群集分析（投影、分組、統計、圖形） | 尚未開始 |
+| **C1** | 投影與等值線（Schmidt/Wulff、Kamb 密度） | ✅ 完成，待檢視 |
+| C2 | 分組演算法（fuzzy c-means、密度法、K 的決定） | 尚未開始 |
+| C3 | 每組統計（Fisher、Woodcock、Terzaghi、DFN 參數） | 尚未開始 |
+| C4 | 圖形（立體投影、玫瑰圖、Woodcock 圖） | 尚未開始 |
 | D | 匯出（CSV/GeoJSON/KML/PDF/zip） | 尚未開始 |
 
-分階段交付，每階段結束停下來檢視。**目前停在 B2 結束**。
+分階段交付，每階段結束停下來檢視。**目前停在 C1 結束**。
 A1 的六個地質慣例問題已確認，決策紀錄在 `docs/conventions.md`。
 
 ## 結構
@@ -29,6 +32,7 @@ ios-joint-attitude/
 │   ├── Sources/FieldRecordStore/    SwiftData @Model，整檔 #if canImport(SwiftData)
 │   ├── Sources/FieldSession/        B2 紀錄流程狀態機，Foundation only
 │   ├── Sources/FieldUI/             SwiftUI 畫面，整檔 #if canImport(SwiftUI)
+│   ├── Sources/FabricAnalysis/      C 群集分析，Foundation only
 │   └── Tests/
 ├── docs/conventions.md        地質與座標慣例決策紀錄（含對原規格的一處修正）
 └── tools/reference_check.py   獨立的 Python 參考實作，交叉驗證 Swift 的數學
@@ -37,6 +41,15 @@ ios-joint-attitude/
 `GeoStructuralKit` 不 import UIKit、SwiftUI、CoreMotion、CoreLocation 或 ARKit，
 只吃四元數、向量與角度這些純數字。App 層負責跟感測器打交道，
 把結果餵進來。因此整包可以在任何平台（含 Linux CI）跑測試。
+
+## C1 已實作
+
+- `StereonetProjection` — 等面積（Schmidt）與等角（Wulff），正反投影互為逆函數
+- `Stereonet` — 極點／線狀構造投影、大圓跡線、小圓（α95 錐）、原週圓；
+  **資料點與曲線用不同的摺疊方式**
+- `KambParameters` — 計數圓大小（兩條獨立推導一致到 5.5e-17）、σ、權重與其矩
+- `KambDensity` — 密度場與單點密度，全程軸性
+- `UniformAxialSample` — 黃金角螺旋，嚴格等面積，用於驗證歸一化
 
 ## B2 已實作
 
@@ -160,6 +173,12 @@ python3 tools/reference_check.py
 | `testTheContextIsSnapshottedWhenTheBurstFinishesNotAtConfirmation` | 走開才確認時，定位仍屬於原本那條節理 |
 | `testAutoConfirmStillStopsForAFlaggedMeasurement` | 自動確認仍會為旗標停下 |
 | `testRepeatPressesWithinTheIntervalAreIgnored` | 鍵盤連發與冷手雙擊不會取消剛開始的量測 |
+| `testTheTwoDerivationsOfTheCountingCircleAgree` | Kamb 計數圓的統計推導與幾何推導一致（1e-12）|
+| `testAUniformSampleAveragesToTheSigmaCriterion` | 均勻樣本的密度場平均值回到 3σ —— 歸一化的端對端檢核 |
+| `testDensitySaturatesOnceTheSetIsTighterThanTheCountingCircle` | 密度封頂在 N/σ，截頂的峰值不代表集中度 |
+| `testFlippingHalfTheInputLeavesTheFieldUnchanged` | 翻轉一半樣本後密度場必須位元相同 |
+| `testNumericalMomentsReproduceTheClosedFormForTheHardCircle` | 平滑權重的 σ 尺度建立在能還原解析式的數值矩上 |
+| `testSmallCircleCrossingTheHorizonSplitsIntoTwoArcs` | 跨越地平面的錐面分成兩段，不可連起來 |
 | `testSignFlippedSamplesGiveTheSameMean` | 軸性平均：符號相反的樣本不會相消（對照組算術平均只剩 0.021） |
 | `testGirdleFabricEigenvalues` | 環帶型 fabric 的特徵值退化情況 |
 | `testARKitMappingPreservesHandedness` | ARKit 轉換行列式為 +1，不鏡射 |

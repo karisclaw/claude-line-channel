@@ -632,6 +632,65 @@ def press_outcome(state, elapsed_since_last_press=None):
     return PRESS_MEANING[state]
 
 
+# ---- C1: projection and Kamb density (mirrors FabricAnalysis) ----
+
+
+def projection_radius(theta_deg, equal_area=True):
+    """Radial distance on a unit primitive, theta measured from the downward vertical."""
+    half = R(min(max(theta_deg, 0.0), 90.0)) / 2
+    return math.sqrt(2) * math.sin(half) if equal_area else math.tan(half)
+
+
+def kamb_counting_circle(sample_count, criterion=3.0):
+    """(area fraction, angular radius in radians, expected count, standard deviation).
+
+    Two routes to the same circle, and they are worth stating because each checks the
+    other. Statistically, E = Na and sigma = sqrt(Na(1-a)), so E = k*sigma forces
+    a = k^2/(N + k^2). Geometrically, the equal-area projection preserves area, so the
+    circle's projected radius is sqrt(a) = k/sqrt(N + k^2) -- the form usually quoted.
+    """
+    a = criterion * criterion / (sample_count + criterion * criterion)
+    rho = math.acos(1 - a)
+    return a, rho, sample_count * a, math.sqrt(sample_count * a * (1 - a))
+
+
+def spiral_axes(count):
+    """Deterministic, exactly area-uniform axial sample. Uniform in cos(theta)."""
+    golden = math.pi * (3 - math.sqrt(5))
+    out = []
+    for k in range(count):
+        up = (k + 0.5) / count
+        ring = math.sqrt(max(0.0, 1 - up * up))
+        phi = k * golden
+        out.append(neg(upper_hemisphere((ring * math.cos(phi), ring * math.sin(phi), up))))
+    return out
+
+
+def kamb_grid_mean(axes, steps, criterion=3.0):
+    """Mean density over the grid nodes inside the primitive, in sigma."""
+    n = len(axes)
+    _, rho, _, sigma = kamb_counting_circle(n, criterion)
+    total = 0.0
+    nodes = 0
+    for iy in range(steps):
+        for ix in range(steps):
+            x = -1 + 2 * (ix + 0.5) / steps
+            y = -1 + 2 * (iy + 0.5) / steps
+            r = math.hypot(x, y)
+            if r > 1:
+                continue
+            theta = 2 * math.asin(clamp(r / math.sqrt(2), 0, 1))
+            azm = math.atan2(x, y)
+            node = (math.sin(theta) * math.cos(azm),
+                    -math.sin(theta) * math.sin(azm),
+                    -math.cos(theta))
+            count = sum(1 for u in axes
+                        if math.acos(clamp(abs(dot(norm(u), node)), 0, 1)) <= rho)
+            total += count / sigma
+            nodes += 1
+    return total / nodes if nodes else 0.0
+
+
 def octant(vector):
     return (1 if vector[0] >= 0 else 0) | (2 if vector[1] >= 0 else 0) | (4 if vector[2] >= 0 else 0)
 
@@ -1232,6 +1291,49 @@ def main():
     print("a press means:")
     for state, outcome in PRESS_MEANING.items():
         print(f"  {state:16s} -> {outcome}")
+
+    # 31. Projection: both put the vertical at the centre and the horizontal on the
+    #     primitive, and only the equal-area one preserves area.
+    for equal_area in (True, False):
+        check(f"centre radius (equal_area={equal_area})",
+              projection_radius(0, equal_area), 0.0, 1e-12)
+        check(f"primitive radius (equal_area={equal_area})",
+              projection_radius(90, equal_area), 1.0, 1e-12)
+    for cap in (5.0, 15.0, 30.0, 45.0, 60.0, 90.0):
+        area = 1 - math.cos(R(cap))
+        r = projection_radius(cap, True)
+        check(f"equal-area preserves area at {cap:g} deg", r * r, area, 1e-12)
+    r30 = projection_radius(30.0, False)
+    if abs(r30 * r30 - (1 - math.cos(R(30.0)))) < 0.05:
+        FAILURES.append("the equal-angle projection must NOT preserve area")
+
+    # 32. The Kamb counting circle, by both routes.
+    for n in (20, 50, 100, 200, 500, 1000):
+        a, rho, expected, sigma = kamb_counting_circle(n)
+        check(f"E = 3 sigma at N={n}", expected / sigma, 3.0)
+        check(f"projected radius at N={n}", math.sqrt(a), 3.0 / math.sqrt(n + 9), 1e-12)
+    check("counting circle at N=100", D(kamb_counting_circle(100)[1]), 23.447, 1e-3)
+    check("counting circle at N=1000", D(kamb_counting_circle(1000)[1]), 7.658, 1e-3)
+    radii = [kamb_counting_circle(n)[1] for n in (20, 50, 100, 500, 1000)]
+    if any(b >= a for a, b in zip(radii, radii[1:])):
+        FAILURES.append("a larger sample must earn a smaller counting circle")
+
+    # 33. The whole normalization, end to end: a sample with no preferred orientation
+    #     averages to the criterion over the grid, because the equal-area grid samples
+    #     the hemisphere by equal area.
+    for n in (200, 400, 800):
+        mean = kamb_grid_mean(spiral_axes(n), 21)
+        check(f"uniform grid mean at N={n}", mean, 3.0, 0.05)
+    print(f"uniform sample, N=400: grid mean {kamb_grid_mean(spiral_axes(400), 21):.4f} sigma "
+          f"(expected 3.0000)")
+
+    # 34. Density saturates once a set is tighter than the counting circle, so a capped
+    #     peak carries no information about concentration.
+    _, rho, _, sigma = kamb_counting_circle(200)
+    ceiling = 200 / sigma
+    check("saturation ceiling at N=200", ceiling, 69.67, 0.01)
+    if D(rho) < 16.0 or D(rho) > 17.5:
+        FAILURES.append(f"counting circle at N=200 is {D(rho):.2f} deg, expected about 16.9")
 
     print("ISRM class boundaries, for checking against the standard:")
     print_isrm_tables()

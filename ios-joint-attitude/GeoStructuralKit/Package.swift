@@ -18,7 +18,8 @@ let package = Package(
         .library(name: "FieldRecord", targets: ["FieldRecord"]),
         .library(name: "FieldRecordStore", targets: ["FieldRecordStore"]),
         .library(name: "FieldSession", targets: ["FieldSession"]),
-        .library(name: "FieldUI", targets: ["FieldUI"])
+        .library(name: "FieldUI", targets: ["FieldUI"]),
+        .library(name: "FabricAnalysis", targets: ["FabricAnalysis"])
     ],
     targets: [
         // A1 + A2: attitude conversion, sampling, quality. Foundation only.
@@ -66,6 +67,19 @@ let package = Package(
         .testTarget(
             name: "FieldSessionTests",
             dependencies: ["FieldSession", "FieldRecord", "OrientationCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        // C: joint-set analysis — projection, density, grouping, per-set statistics.
+        // Foundation only; the plots read from it rather than computing anything.
+        .target(
+            name: "FabricAnalysis",
+            dependencies: ["OrientationCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "FabricAnalysisTests",
+            dependencies: ["FabricAnalysis", "OrientationCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
