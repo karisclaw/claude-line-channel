@@ -1,2 +1,7 @@
 node_modules/
 *.bak
+
+# Swift package build artifacts (ios-joint-attitude)
+.build/
+.swiftpm/
+*.xcuserdatad
