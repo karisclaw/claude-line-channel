@@ -67,6 +67,17 @@ jobs:
         working-directory: ios-joint-attitude/GeoStructuralKit
         run: swift build --build-tests
 
+      # The compiler stops at the first error, so a file with ten mistakes in it costs ten
+      # CI rounds to find them. On a failed build, go round again asking it to carry on
+      # past each error, so one log holds all of them. Diagnostic only: the step above is
+      # what decides the job, and this one is allowed to fail on its own terms — including
+      # if the flag is not recognised, which is why it is not on the step that matters.
+      - name: Every error, not just the first
+        if: failure()
+        continue-on-error: true
+        working-directory: ios-joint-attitude/GeoStructuralKit
+        run: swift build --build-tests -Xswiftc -continue-building-after-errors
+
       - name: Test
         working-directory: ios-joint-attitude/GeoStructuralKit
         run: swift test
@@ -85,6 +96,17 @@ jobs:
       - name: Build
         working-directory: ios-joint-attitude/GeoStructuralKit
         run: swift build --build-tests
+
+      # The compiler stops at the first error, so a file with ten mistakes in it costs ten
+      # CI rounds to find them. On a failed build, go round again asking it to carry on
+      # past each error, so one log holds all of them. Diagnostic only: the step above is
+      # what decides the job, and this one is allowed to fail on its own terms — including
+      # if the flag is not recognised, which is why it is not on the step that matters.
+      - name: Every error, not just the first
+        if: failure()
+        continue-on-error: true
+        working-directory: ios-joint-attitude/GeoStructuralKit
+        run: swift build --build-tests -Xswiftc -continue-building-after-errors
 
       - name: Test
         working-directory: ios-joint-attitude/GeoStructuralKit

@@ -271,7 +271,7 @@ final class ObservationTests: XCTestCase {
             aperture: .measured(millimetres: 0.3),
             infilling: .clean,
             weathering: .slightlyWeathered,
-            seepage: .damp,
+            seepage: .unfilled(.damp),
             persistence: .measured(metres: 4),
             spacing: .measured(millimetres: 300),
             termination: .terminatesInRock
