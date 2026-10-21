@@ -78,9 +78,21 @@ jobs:
         working-directory: ios-joint-attitude/GeoStructuralKit
         run: swift build --build-tests -Xswiftc -continue-building-after-errors
 
+      # XCTest prints a line per test, so a failing run buries its eleven interesting
+      # lines in three hundred. Repeat just those at the end, where they can be read
+      # without scrolling the whole log.
       - name: Test
         working-directory: ios-joint-attitude/GeoStructuralKit
-        run: swift test
+        run: |
+          set +e
+          swift test 2>&1 | tee test-output.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo
+            echo '===== failures only ====='
+            grep -E ": error:|' failed \(|Executed [0-9]+ tests" test-output.log | tail -200
+          fi
+          exit "$status"
 
   apple:
     name: macOS — everything, including SwiftData and SwiftUI
@@ -108,9 +120,21 @@ jobs:
         working-directory: ios-joint-attitude/GeoStructuralKit
         run: swift build --build-tests -Xswiftc -continue-building-after-errors
 
+      # XCTest prints a line per test, so a failing run buries its eleven interesting
+      # lines in three hundred. Repeat just those at the end, where they can be read
+      # without scrolling the whole log.
       - name: Test
         working-directory: ios-joint-attitude/GeoStructuralKit
-        run: swift test
+        run: |
+          set +e
+          swift test 2>&1 | tee test-output.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo
+            echo '===== failures only ====='
+            grep -E ": error:|' failed \(|Executed [0-9]+ tests" test-output.log | tail -200
+          fi
+          exit "$status"
 
   reference:
     name: Python reference cross-check
