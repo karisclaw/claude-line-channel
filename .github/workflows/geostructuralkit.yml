@@ -1,0 +1,104 @@
+# CI for the iOS joint-attitude app's Swift package.
+#
+# This repository had no CI, so until now nothing had ever compiled GeoStructuralKit —
+# it was written without a Swift toolchain available, and every commit message says so.
+# These three jobs exist to answer three different questions, and none of them answers
+# another's:
+#
+#   portable   Do the Foundation-only modules build, and do their ~297 tests pass?
+#              The Swift container gives a known toolchain rather than whatever an
+#              image happens to ship.
+#
+#   apple      Do FieldRecordStore (SwiftData) and FieldUI (SwiftUI) compile at all?
+#              They are behind `#if canImport(...)`, so on Linux they compile to
+#              nothing and the portable job cannot see them. This is the only job that
+#              can, and they are the least verified code in the project.
+#              Note: macOS runner minutes bill at ten times the Linux rate on private
+#              repositories. Drop this job if that matters more than covering those
+#              two modules.
+#
+#   reference  Does the Python cross-check still agree with the Swift?
+#              Every formula in the package was verified against
+#              tools/reference_check.py, which holds the same maths independently.
+#              Running it here keeps the two from drifting apart silently.
+name: GeoStructuralKit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ios-joint-attitude/**'
+      - '.github/workflows/geostructuralkit.yml'
+  pull_request:
+    paths:
+      - 'ios-joint-attitude/**'
+      - '.github/workflows/geostructuralkit.yml'
+
+# A new push supersedes the one before it; there is nothing to learn from a run against
+# code that has already been replaced.
+concurrency:
+  group: geostructuralkit-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  portable:
+    name: Linux — portable modules
+    runs-on: ubuntu-latest
+    # The official image, so the toolchain is a stated version rather than an inherited
+    # one. The package declares swift-tools-version 6.0 and builds in language mode 6,
+    # so anything older cannot even parse the manifest.
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+
+      # Printed before anything else: if a build fails for want of a newer compiler,
+      # this line is the answer and saves reading the rest of the log.
+      - name: Toolchain
+        run: swift --version
+
+      - name: Build
+        working-directory: ios-joint-attitude/GeoStructuralKit
+        run: swift build --build-tests
+
+      - name: Test
+        working-directory: ios-joint-attitude/GeoStructuralKit
+        run: swift test
+
+  apple:
+    name: macOS — everything, including SwiftData and SwiftUI
+    # macos-15 for Xcode 16: the macos-14 image's default Xcode is 15.x, whose Swift
+    # cannot read a tools-version 6.0 manifest.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Build
+        working-directory: ios-joint-attitude/GeoStructuralKit
+        run: swift build --build-tests
+
+      - name: Test
+        working-directory: ios-joint-attitude/GeoStructuralKit
+        run: swift test
+
+  reference:
+    name: Python reference cross-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Prints the ISRM class boundaries and the seepage tables as it goes, so a
+      # reviewer can check them against the standard from the log alone.
+      - name: Cross-check the maths against the reference implementation
+        working-directory: ios-joint-attitude
+        run: python3 tools/reference_check.py
