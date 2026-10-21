@@ -6,12 +6,38 @@ import FieldRecord
 
 /// Builds a device attitude for a known plane, as the test helper in OrientationCoreTests
 /// does — repeated here because test targets do not share code.
-private func attitude(dip: Double, dipDirection: Double) -> Quaternion {
+///
+/// The placement has to be passed in, and has to match the one the recorder is set to.
+/// A phone laid on its left side reads the face through its `+X` axis, not through its
+/// back, so building the attitude around `+Z` and then telling the recorder the left side
+/// was used describes two different physical acts and yields a plane that is neither.
+private func attitude(
+    dip: Double,
+    dipDirection: Double,
+    placement: DevicePlacement = DeviceAttitude.defaultPlacement
+) -> Quaternion {
     let normal = PlaneOrientation(dip: dip, dipDirection: dipDirection).upwardNormal
     let reference = abs(normal.x) < 0.9 ? Vector3(1, 0, 0) : Vector3(0, 1, 0)
-    let ex = reference.cross(normal).normalized!
-    let ey = normal.cross(ex)
-    return Quaternion(deviceXInWorld: ex, deviceYInWorld: ey, deviceZInWorld: normal)!
+    let u = reference.cross(normal).normalized!
+    let v = normal.cross(u)
+
+    // The contacting axis points along the outward normal; the other two go anywhere
+    // orthogonal, because how far the phone is rolled against the rock cannot change the
+    // attitude it reads. Each triple is right-handed, as a rotation must be.
+    switch placement.outwardNormalAxis {
+    case .plusZ:
+        return Quaternion(deviceXInWorld: u, deviceYInWorld: v, deviceZInWorld: normal)!
+    case .minusZ:
+        return Quaternion(deviceXInWorld: u, deviceYInWorld: -v, deviceZInWorld: -normal)!
+    case .plusX:
+        return Quaternion(deviceXInWorld: normal, deviceYInWorld: u, deviceZInWorld: v)!
+    case .minusX:
+        return Quaternion(deviceXInWorld: -normal, deviceYInWorld: u, deviceZInWorld: -v)!
+    case .plusY:
+        return Quaternion(deviceXInWorld: v, deviceYInWorld: normal, deviceZInWorld: u)!
+    case .minusY:
+        return Quaternion(deviceXInWorld: -v, deviceYInWorld: -normal, deviceZInWorld: u)!
+    }
 }
 
 private let epoch = Date(timeIntervalSince1970: 1_700_000_000)
@@ -40,12 +66,19 @@ private func feedMotion(
     _ recorder: inout MeasurementRecorder,
     dip: Double = 42,
     dipDirection: Double = 137,
+    placement: DevicePlacement? = nil,
     startingAt start: TimeInterval = 0,
     count: Int = 200,
     userAcceleration: Vector3 = .zero
 ) -> [MeasurementRecorder.Outcome] {
     var outcomes: [MeasurementRecorder.Outcome] = []
-    let device = attitude(dip: dip, dipDirection: dipDirection)
+    // Default to whatever the recorder is actually set to, so a test that changes the
+    // placement cannot forget to change the attitude with it.
+    let device = attitude(
+        dip: dip,
+        dipDirection: dipDirection,
+        placement: placement ?? recorder.session.geometry.placement
+    )
     for index in 0..<count {
         let sample = MotionSample(
             timestamp: start + Double(index) / 64,

@@ -136,16 +136,26 @@ public struct KambParameters: Equatable, Sendable {
         }
     }
 
-    /// `∫w sin φ dφ` and `∫w² sin φ dφ` over `0...π/2`, by midpoint quadrature.
+    /// `∫w sin φ dφ` and `∫w² sin φ dφ` over the weight's support, by midpoint quadrature.
     ///
     /// `sin φ` is the exact density of the axial angle under a uniform distribution, so
     /// these are the per-sample mean and second moment of the weight.
+    ///
+    /// The domain ends at `radius` rather than at `π / 2`. Beyond the radius the weight is
+    /// identically zero, so those cells contribute nothing — but a cell that *straddles*
+    /// the radius contributes the wrong thing: the hard circle's weight steps from 1 to 0
+    /// there, and midpoint quadrature across a step is accurate only to `O(h)`, which cost
+    /// about four decimal places and showed up as the closed forms `m₁ = m₂ = a` missing
+    /// by ~1e-5. Ending the domain at the step leaves a smooth integrand and the usual
+    /// `O(h²)`.
     static func moments(
         radius: Double,
         weighting: ContourWeighting,
         steps: Int = 20_000
     ) -> (first: Double, second: Double) {
-        let h = (Double.pi / 2) / Double(steps)
+        let support = min(radius, Double.pi / 2)
+        guard support > 0, steps > 0 else { return (0, 0) }
+        let h = support / Double(steps)
         var first = 0.0
         var second = 0.0
         for index in 0..<steps {

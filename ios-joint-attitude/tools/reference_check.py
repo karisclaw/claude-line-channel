@@ -728,6 +728,73 @@ def device_quaternion(dip, dipdir, spin):
     return q_from_columns(c0, c1, n)
 
 
+def placement_test_frame(dip, dipdir, placement):
+    """Columns of a device->world rotation that rests `placement` on a known plane.
+
+    Mirrors the test helper in MeasurementRecorderTests: the contacting axis is put along
+    the outward normal and the other two device axes go anywhere orthogonal, because how
+    far the phone is rolled against the rock cannot change the attitude it reads. Each
+    triple has to be right-handed, or it is not a rotation at all.
+    """
+    n = normal_from_plane(dip, dipdir)
+    r = (1.0, 0.0, 0.0) if abs(n[0]) < 0.9 else (0.0, 1.0, 0.0)
+    u = norm(cross(r, n))
+    v = cross(n, u)
+    axis = OUTWARD_NORMAL_AXIS[placement]
+    if axis == (0.0, 0.0, 1.0):
+        return u, v, n
+    if axis == (0.0, 0.0, -1.0):
+        return u, neg(v), neg(n)
+    if axis == (1.0, 0.0, 0.0):
+        return n, u, v
+    if axis == (-1.0, 0.0, 0.0):
+        return neg(n), u, neg(v)
+    if axis == (0.0, 1.0, 0.0):
+        return v, n, u
+    return neg(v), neg(n), u
+
+
+def kamb_moments(radius, weighting="kamb", steps=20000, to_quadrant=False):
+    """Weight moments by midpoint quadrature.
+
+    `to_quadrant` integrates to pi/2 instead of stopping at the radius, which is the
+    version that was wrong: for the hard circle the weight steps from 1 to 0 at the
+    radius, and a midpoint cell straddling a step is only O(h) accurate.
+    """
+    upper = math.pi / 2 if to_quadrant else min(radius, math.pi / 2)
+    h = upper / steps
+    first = second = 0.0
+    for i in range(steps):
+        phi = (i + 0.5) * h
+        if phi >= radius:
+            continue
+        w = 1.0 if weighting == "kamb" else (1 - (phi / radius) ** 2) ** 2
+        measure = math.sin(phi) * h
+        first += w * measure
+        second += w * w * measure
+    return first, second
+
+
+def project_curve_point(v, equal_area=True):
+    """(east, north) on the net, folding only what is STRICTLY above the horizon."""
+    u = norm(v)
+    down = neg(u) if u[2] > 0 else u
+    theta = D(math.acos(clamp(-down[2], -1, 1)))
+    radius = projection_radius(theta, equal_area)
+    azimuth = math.atan2(-down[1], down[0])
+    return radius * math.sin(azimuth), radius * math.cos(azimuth)
+
+
+def project_axis_point(v, equal_area=True):
+    """(east, north) on the net for an AXIS, folded by the equator tie-break."""
+    return project_curve_point(neg(upper_hemisphere(v)), equal_area)
+
+
+def point_azimuth(point):
+    east, north = point
+    return az(D(math.atan2(east, north)))
+
+
 def main():
     # 1. The specified round-trip accuracy: better than 0.01 deg.
     worst_dip = worst_dipdir = 0.0
@@ -1334,6 +1401,52 @@ def main():
     check("saturation ceiling at N=200", ceiling, 69.67, 0.01)
     if D(rho) < 16.0 or D(rho) > 17.5:
         FAILURES.append(f"counting circle at N=200 is {D(rho):.2f} deg, expected about 16.9")
+
+    # 35. The test attitude has to be built for the placement the recorder is set to.
+    #     Building it around the phone's back and then claiming the left side was used
+    #     describes two different physical acts, and the plane that comes back is
+    #     neither: for dip 61/020 it reads 58.32, which is what the suite caught.
+    for placement in OUTWARD_NORMAL_AXIS:
+        c0, c1, c2 = placement_test_frame(61, 20, placement)
+        determinant = dot(c0, cross(c1, c2))
+        check(f"{placement} attitude frame is a rotation", determinant, 1.0, 1e-12)
+        world = qrotate(q_from_columns(c0, c1, c2), OUTWARD_NORMAL_AXIS[placement])
+        read_dip, read_dipdir = plane_from_normal(world)
+        check(f"{placement} reads the plane it was built for (dip)", read_dip, 61.0, 1e-9)
+        check_azimuth(f"{placement} reads the plane it was built for (dipdir)",
+                      read_dipdir, 20.0, 1e-9)
+
+    # 36. The hard circle's moments have closed forms, m1 = m2 = a. Integrating over the
+    #     weight's support reproduces them; integrating over the whole quadrant does not,
+    #     and the error is far worse than the 1e-6 the suite asks for. Both directions are
+    #     checked so the domain cannot quietly go back to pi/2.
+    for sample_count in (50, 200, 1000):
+        area, rho, _, _ = kamb_counting_circle(sample_count)
+        first, second = kamb_moments(rho)
+        check(f"m1 over the support at N={sample_count}", first, area, 1e-9)
+        check(f"m2 over the support at N={sample_count}", second, area, 1e-9)
+        stale_first, _ = kamb_moments(rho, to_quadrant=True)
+        if abs(stale_first - area) < 1e-6:
+            FAILURES.append(
+                f"integrating to pi/2 at N={sample_count} is accurate to 1e-6, so the "
+                f"reason for stopping at the radius no longer holds"
+            )
+
+    # 37. A recorded horizontal lineation plots at the trend it was recorded at. The axial
+    #     fold would move half of them to trend + 180 -- correct for a pole, wrong for a
+    #     datum the geologist wrote a trend for.
+    for trend in (0, 45, 90, 135, 180, 225, 270, 315):
+        axis = axis_from_line(trend, 0)
+        check_azimuth(f"horizontal lineation at trend {trend} plots there",
+                      point_azimuth(project_curve_point(axis)), trend, 1e-9)
+        check(f"horizontal lineation at trend {trend} lands on the primitive",
+              math.hypot(*project_curve_point(axis)), 1.0, 1e-9)
+    moved = [t for t in (0, 45, 90, 135, 180, 225, 270, 315)
+             if abs(azimuth_separation(point_azimuth(project_axis_point(axis_from_line(t, 0))), t)) > 1e-6]
+    if len(moved) != 4:
+        FAILURES.append(
+            f"the axial fold should move exactly half of the horizontal trends, moved {moved}"
+        )
 
     print("ISRM class boundaries, for checking against the standard:")
     print_isrm_tables()

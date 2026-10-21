@@ -99,12 +99,23 @@ public enum Stereonet {
         project(axis: plane.pole, using: projection)!
     }
 
-    /// Plots a lineation.
+    /// Plots a **recorded** lineation, at the trend it was recorded at.
+    ///
+    /// For any plunging line this is the same as the axial fold: the down-plunge end is
+    /// already in the lower hemisphere and nothing moves. The two differ only for a
+    /// horizontal line, where both ends are equally valid and the axial tie-break would
+    /// put the point at `trend + 180`. A geologist who wrote down 000 must not be shown
+    /// a point at 180, so here the record wins.
+    ///
+    /// ``project(axis:using:)`` keeps the tie-break instead, because a pole has no
+    /// recorded sense and the two normals of a vertical joint have to land on one point.
+    /// ``LineOrientation/isTrendAmbiguous`` is what says the two ends were interchangeable
+    /// in the first place.
     public static func project(
         line: LineOrientation,
         using projection: StereonetProjection = .equalArea
     ) -> StereonetPoint {
-        project(axis: line.downPlungeVector, using: projection)!
+        projectCurvePoint(line.downPlungeVector, using: projection)!
     }
 
     /// Projects a point on a **curve**, folding only what is strictly above the horizon.
